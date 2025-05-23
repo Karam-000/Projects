@@ -1,0 +1,243 @@
+EMPLOYEE API v1.2
+=================
+
+BASE URL: /api/employee  
+API Version: 1.2
+Last Updated: 2023-11-15
+
+PERFORMANCE METRICS:
+- Average Response Time: 200-500ms
+- Throughput: 400-700 requests/second
+- Rate Limits: 150 requests/min per endpoint
+- Max Concurrent Operations: 5 per employee
+- Audit Log Retention: 90 days
+
+REQUIRED HEADERS:
+- Content-Type: application/json
+- Accept: application/json  
+- Authorization: Bearer {token}
+- X-Requested-By: employee_portal
+
+SECURITY REQUIREMENTS:
+- All routes require valid JWT token
+- Department-specific permissions enforced
+- Sensitive operations require MFA
+- All changes are audited
+
+DEPARTMENT PERMISSIONS:
+- HR: Employee CRUD operations
+- IT: System/product management
+- Warehouse: Inventory/shelf management
+- Finance: Payment/order oversight
+
+1. EMPLOYEE MANAGEMENT (HR ONLY)
+--------------------------------
+
+1.1 PATCH /UpdateEmployee  
+Update employee details (Requires HR Manager role)
+
+Request Body:
+{
+  "Updateid": "string (required, existing employee ID)",
+  "Updates": {
+    "EmployeeName": "string (min 2 chars)",
+    "Email": "string (valid email format)", 
+    "Phone": "string (10-15 digits)",
+    "Department": "string (HR|IT|WAREHOUSE|FINANCE)",
+    "Position": "string (min 2 chars)",
+    "Status": "ACTIVE|INACTIVE"
+  }
+}
+
+Success Response (200):
+{
+  "success": true,
+  "message": "Employee updated successfully",
+  "transactionId": "uuid",
+  "auditLog": {
+    "changedFields": ["field1", "field2"],
+    "changedBy": "employee_id",
+    "timestamp": "ISO8601"
+  }
+}
+
+Error Responses:
+403 Forbidden:
+{
+  "error": "PERMISSION_DENIED",
+  "message": "HR Manager role required"
+}
+
+400 Bad Request:
+{
+  "error": "VALIDATION_ERROR",
+  "message": "Invalid department value",
+  "allowedValues": ["HR", "IT", "WAREHOUSE", "FINANCE"]
+}
+
+1.2 DELETE /DeleteEmployee
+Remove employee
+
+Request Body:
+{
+  "Deleteid": "string (required)"
+}
+
+Success Response (200):
+{
+  "success": true,
+  "message": "Employee deleted successfully",
+  "transactionId": "string"
+}
+
+1.3 GET /GetEmployeeInfo
+View employee info
+
+Query Parameters:
+?employeeid=employee_id
+
+Success Response (200):
+{
+  "success": true,
+  "data": employee_details_object,
+  "transactionId": "string"
+}
+
+1.4 POST /CreateEmployee
+Add new employee
+
+Request Body:
+{
+  "employee": {
+    "EmployeeName": "string (required)",
+    "Email": "string (required)",
+    "Phone": "string (required)",
+    "Department": "string (required)",
+    "Position": "string (required)",
+    "Password": "string (required)"
+  }
+}
+
+Success Response (200):
+{
+  "success": true,
+  "message": "Employee created successfully",
+  "transactionId": "string"
+}
+
+1.5 PATCH /ChangeEmployeePassword (IT ONLY)
+Reset employee password
+
+Request Body:
+{
+  "employeeid": "string (required)",
+  "NewPassword": "string (required)"
+}
+
+Success Response (200):
+{
+  "success": true,
+  "message": "Password updated successfully",
+  "transactionId": "string"
+}
+
+2. PRODUCT MANAGEMENT (IT ONLY)
+-------------------------------
+
+2.1 PUT /UpdateProduct
+Modify product details
+
+Request Body:
+{
+  "productId": "string (required)",
+  "updateParams": {
+    "ProductName": "string",
+    "Description": "string",
+    "Price": number,
+    "Category": "string"
+  }
+}
+
+Success Response (200):
+{
+  "success": true,
+  "message": "Product updated",
+  "transactionId": "string"
+}
+
+2.2 DELETE /DeleteProduct
+Remove product
+
+Request Body:
+{
+  "productId": "string (required)"
+}
+
+Success Response (200):
+{
+  "success": true,
+  "message": "Product deleted",
+  "transactionId": "string"
+}
+
+2.3 POST /addToShelf (WAREHOUSE ONLY)
+Add product to warehouse shelf
+
+Request Body:
+{
+  "productId": "string (required)",
+  "shelfName": "string (required)",
+  "branchId": "string (required)",
+  "expiryDate": "string (ISO format)"
+}
+
+Success Response (200):
+{
+  "success": true,
+  "message": "Product added to shelf successfully",
+  "data": {
+    "shelfId": "string",
+    "locationId": "string",
+    "coordinates": "string",
+    "expiryDate": "string"
+  }
+}
+
+3. SYSTEM OPERATIONS (IT ONLY)
+------------------------------
+
+3.1 DELETE /error-logs/:id
+Delete error log
+
+Path Parameters:
+:id = error_log_id
+
+Success Response (200):
+{
+  "success": true,
+  "message": "Error log deleted"
+}
+
+3.2 GET /error-logs
+View all error logs
+
+Success Response (200):
+{
+  "success": true,
+  "logs": [array_of_error_logs]
+}
+
+TRANSACTION LOGGING
+-------------------
+All employee actions automatically record audit logs with:
+- Employee ID
+- Employee Name
+- Action description
+- Timestamp
+- Transaction ID
+
+PERMISSIONS
+-----------
+- HR: Employee management
+- IT: System/product operations
+- Warehouse: Shelf management

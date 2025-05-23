@@ -1,0 +1,250 @@
+API ROUTE REFERENCE
+===================
+
+AUTHENTICATION ROUTES
+---------------------
+
+1. POST /auth/login
+- Input: { username, password }
+- Success Output: { status: 'success', user: {userData}, token: 'jwtToken' }
+- Error Output: { status: 'error', message: 'Incorrect Username/Password' }
+
+2. POST /auth/signup  
+- Input: { Username, Password, FirstName, LastName, Email, Phone }
+- Success Output: { success: true, message: 'Verification email sent' }
+- Error Output: { success: false, message: 'Email already exists' }
+
+3. GET /auth/verify?token={token}
+- Input: token (URL parameter)
+- Success Output: HTML success page
+- Error Output: HTML error page
+
+4. POST /auth/ResetPassword
+- Input: { username }
+- Success Output: { success: true, message: 'Password reset email sent' }
+- Error Output: { success: false, message: 'User not found' }
+
+5. POST /auth/Reset-Password
+- Input: { newPassword, token }
+- Success Output: { success: true, message: 'Password updated successfully' }
+- Error Output: { success: false, message: 'Invalid or expired token' }
+
+6. POST /auth/LoginEmloyee
+- Input: { employeeId, password }
+- Success Output: { token: 'jwtToken' }
+- Error Output: { message: 'Incorrect Employee ID/Password' }
+
+7. POST /auth/renew-token
+- Input: { oldToken }
+- Success Output: { success: true, token: 'newToken' }
+- Error Output: { success: false, message: 'Invalid/expired token' }
+
+8. POST /auth/renew-employee-token
+- Input: { oldToken }
+- Success Output: { success: true, token: 'newToken' }
+- Error Output: { success: false, message: 'Invalid/expired token' }
+
+9. POST /auth/GoogleSignup
+- Input: { googleToken }
+- Success Output: { success: true, message: 'Registered successfully' }
+- Error Output: { success: false, message: 'Email already exists' }
+
+PUBLIC ROUTE
+------------
+GET /auth/public
+- No auth required
+- Output: { message: 'Public Route - No authentication required' }
+
+CUSTOMER ROUTES
+---------------
+
+1. GET /customer/products
+- Input: None (authenticated)
+- Success Output: { status: 'success', data: [productDetails] }
+- Error Output: { status: 'error', message: 'No products found' }
+
+2. GET /customer/searchProduct?q={searchTerm}
+- Input: searchTerm (query param)
+- Success Output: { status: 'success', data: [matchedProducts] }
+- Error Output: { status: 'error', message: 'Search term is required' }
+
+3. POST /customer/addToCart
+- Input: { inventoryId, quantity }
+- Success Output: { success: true, message: 'Product added to cart' }
+- Error Output: { success: false, message: 'Invalid inventory ID/quantity' }
+
+4. POST /customer/decrementCart
+- Input: { inventoryId }
+- Success Output: { success: true, message: 'Cart item decremented' }
+- Error Output: { success: false, message: 'Item not found' }
+
+5. POST /customer/removeCart
+- Input: { inventoryId }
+- Success Output: { success: true, message: 'Cart item removed' }
+- Error Output: { success: false, message: 'Item not found' }
+
+6. GET /customer/cart
+- Input: None (authenticated)
+- Success Output: { success: true, items: [cartItems] }
+- Error Output: { success: false, message: 'No items in cart' }
+
+7. POST /customer/placeOrder
+- Input: { branchId, deliveryLocationId, paymentId }
+- Success Output: { success: true, message: 'Order placed successfully' }
+- Error Output: { success: false, message: 'Missing parameters' }
+
+8. GET /customer/getCustomerInfo
+- Input: None (authenticated)
+- Success Output: { customerInfo }
+- Error Output: { success: false, message: 'Internal Server Error' }
+
+9. PATCH /customer/updateCustomerInfo
+- Input: { CustomerID, ...updates }
+- Success Output: { success: true, message: 'Customer updated' }
+- Error Output: { success: false, message: 'Invalid fields' }
+
+10. DELETE /customer/delete-account
+- Input: { password }
+- Success Output: { success: true, message: 'Account deleted' }
+- Error Output: { success: false, message: 'Invalid password' }
+
+11. POST /customer/add-payment
+- Input: { paymentDetails }
+- Success Output: { success: true, message: 'Payment added' }
+- Error Output: { success: false, message: 'Payment details required' }
+
+12. PATCH /customer/update-payment
+- Input: { paymentId, updates }
+- Success Output: { success: true, message: 'Payment updated' }
+- Error Output: { success: false, message: 'Payment ID required' }
+
+13. DELETE /customer/delete-payment
+- Input: { paymentId }
+- Success Output: { success: true, message: 'Payment deleted' }
+- Error Output: { success: false, message: 'Payment ID required' }
+
+14. GET /customer/get-payment
+- Input: None (authenticated)
+- Success Output: { success: true, payments: [paymentMethods] }
+- Error Output: { success: false, message: error.message }
+
+15. POST /customer/add-delivery-location
+- Input: { location }
+- Success Output: { success: true, message: 'Location added' }
+- Error Output: { success: false, message: 'Location details required' }
+
+16. PATCH /customer/update-delivery-location
+- Input: { deliveryLocationID, updates }
+- Success Output: { success: true, message: 'Location updated' }
+- Error Output: { success: false, message: 'Location ID required' }
+
+17. DELETE /customer/delete-delivery-location
+- Input: { deliveryLocationID }
+- Success Output: { success: true, message: 'Location deleted' }
+- Error Output: { success: false, message: 'Location ID required' }
+
+18. GET /customer/get-delivery-locations
+- Input: None (authenticated)
+- Success Output: { success: true, locations: [deliveryLocations] }
+- Error Output: { success: false, message: error.message }
+
+EMPLOYEE ROUTES
+---------------
+
+1. PATCH /employee/UpdateEmployee (HR Only)
+- Input: { Updateid: 123, Updates: { Department: "IT", Position: "Developer" } }
+- Success Output: { 
+    success: true, 
+    message: "Employee updated successfully",
+    transactionId: "TXN-12345"
+  }
+- Error Output: { success: false, message: "Valid Updateid and Updates are required" }
+
+2. DELETE /employee/DeleteEmployee (HR Only)
+- Input: { Deleteid: 123 }
+- Success Output: {
+    success: true,
+    message: "Employee 123 deleted successfully",
+    transactionId: "TXN-12346"
+  }
+- Error Output: { success: false, message: "Valid Deleteid is required" }
+
+3. GET /employee/GetEmployeeInfo (HR Only)
+- Input: employeeid=123 (query param)
+- Success Output: {
+    success: true,
+    data: { EmployeeID: 123, Name: "John Doe", Department: "IT" },
+    transactionId: "TXN-12347"
+  }
+- Error Output: { success: false, message: "Missing employeeid" }
+
+4. POST /employee/CreateEmployee (HR Only)
+- Input: { employee: { Name: "Jane Smith", Department: "HR", Position: "Manager" } }
+- Success Output: {
+    success: true,
+    message: "Employee created successfully",
+    transactionId: "TXN-12348"
+  }
+- Error Output: { success: false, message: "Invalid employee data" }
+
+5. PATCH /employee/ChangeEmployeePassword (IT Only)
+- Input: { employeeid: 123, NewPassword: "newSecurePassword123" }
+- Success Output: {
+    success: true,
+    message: "Password updated successfully",
+    transactionId: "TXN-12349"
+  }
+- Error Output: { success: false, message: "Invalid password format" }
+
+6. PUT /employee/UpdateProduct (IT Only)
+- Input: { productId: "P-1001", updateParams: { Price: 29.99, Stock: 50 } }
+- Success Output: {
+    success: true,
+    message: "Product P-1001 updated",
+    transactionId: "TXN-12350"
+  }
+- Error Output: { success: false, message: "Invalid request format" }
+
+7. DELETE /employee/DeleteProduct (IT Only)
+- Input: { productId: "P-1001" }
+- Success Output: {
+    success: true,
+    message: "Product P-1001 deleted",
+    transactionId: "TXN-12351"
+  }
+- Error Output: { success: false, message: "No product found with ID P-1001" }
+
+8. DELETE /employee/error-logs/:id (IT Only)
+- Input: id=101 (URL param)
+- Success Output: { success: true, message: "Error log 101 deleted" }
+- Error Output: { success: false, message: "Invalid ErrorLogID" }
+
+9. GET /employee/error-logs (IT Only)
+- Input: None
+- Success Output: {
+    success: true,
+    logs: [
+      { id: 101, error: "DB Connection Failed", timestamp: "2023-01-15T10:30:00Z" }
+    ]
+  }
+- Error Output: { success: false, message: "Failed to fetch error logs" }
+
+10. POST /employee/addToShelf (Warehouse Only)
+- Input: { 
+    EmployeeId: 123,
+    productId: "P-1001", 
+    shelfName: "A1", 
+    branchId: "B-001",
+    expiryDate: "2023-12-31"
+  }
+- Success Output: {
+    success: true,
+    message: "Product added to shelf successfully",
+    data: {
+      shelfId: "SH-001",
+      locationId: "LOC-101",
+      coordinates: "3,5",
+      expiryDate: "2023-12-31"
+    }
+  }
+- Error Output: { success: false, message: "Missing required parameters" }

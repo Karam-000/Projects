@@ -1,0 +1,50 @@
+import paho.mqtt.client as mqtt
+
+# MQTT Configuration
+MQTT_BROKER = "test.mosquitto.org"
+OUTPUT_PATH = "received_image.jpg"
+
+received_size = 0
+expected_size = 0
+buffer = b''
+
+def on_message(client, userdata, msg):
+    global received_size, expected_size, buffer
+
+    if msg.topic == "esp32/cam/image":
+        payload = msg.payload
+
+        # First message contains image size
+        if expected_size == 0:
+            size_msg = payload.decode('utf-8')
+            if size_msg.startswith("size:"):
+                expected_size = int(size_msg[5:])
+                print(f"Receiving image of size: {expected_size} bytes")
+                return
+
+        # Check for end marker
+        if payload == b"END":
+            with open(OUTPUT_PATH, "wb") as f:
+                f.write(buffer)
+            print(f"Image saved as {OUTPUT_PATH}")
+            received_size = 0
+            expected_size = 0
+            buffer = b''
+            return
+
+        # Accumulate image chunks
+        buffer += payload
+        received_size += len(payload)
+        print(f"Progress: {received_size}/{expected_size} bytes ({round(received_size / expected_size * 100)}%)")
+
+# MQTT Setup
+receiver_client = mqtt.Client(client_id="Image_Receiver")
+receiver_client.on_message = on_message
+receiver_client.connect(MQTT_BROKER, 1883)
+receiver_client.subscribe("esp32/cam/image")
+
+# Request image from ESP32-CAM
+print("Requesting image capture...")
+receiver_client.publish("esp32/cam/command", "capture")
+
+receiver_client.loop_forever()

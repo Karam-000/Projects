@@ -1,0 +1,430 @@
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include "esp_camera.h"
+#include "base64.h" // Include Base64 library header
+
+// WiFi and MQTT configuration
+const char* ssid = "";         // <<< CHANGE THIS
+const char* password = ""; // <<< CHANGE THIS
+const char* mqtt_broker = "";     // Your MQTT broker IP
+const int mqtt_port = 1883;
+
+// --- Configuration for this specific ESP32 ---
+const String class_name = "classA"; // <<< SET CLASS NAME FOR THIS ESP
+const String doctor_email = ""; // <<< SET DOCTOR EMAIL
+
+// --- Flash LED Pin ---
+#define FLASH_GPIO_NUM 4
+
+// Camera configuration (AI Thinker model - verify pins for your board)
+#define PWDN_GPIO_NUM     32
+#define RESET_GPIO_NUM    -1 // -1 = not used
+#define XCLK_GPIO_NUM      0
+#define SIOD_GPIO_NUM     26 // SDA
+#define SIOC_GPIO_NUM     27 // SCL
+#define Y9_GPIO_NUM       35 // D7
+#define Y8_GPIO_NUM       34 // D6
+#define Y7_GPIO_NUM       39 // D5
+#define Y6_GPIO_NUM       36 // D4
+#define Y5_GPIO_NUM       21 // D3
+#define Y4_GPIO_NUM       19 // D2
+#define Y3_GPIO_NUM       18 // D1
+#define Y2_GPIO_NUM        5 // D0
+#define VSYNC_GPIO_NUM    25
+#define HREF_GPIO_NUM     23
+#define PCLK_GPIO_NUM     22
+
+// MQTT buffer size - Ensure it's large enough for Base64 image + JSON overhead
+// You might need to increase this further depending on image size/quality
+#define MQTT_BUFFER_SIZE 52768 // 50KB buffer should be safer
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+// --- MQTT Confirmation Topic ---
+String confirmationTopic;
+
+// --- Function Declarations ---
+void reconnect();
+void mqttCallback(char* topic, byte* payload, unsigned int length);
+void blinkFlash(int count, int delay_ms);
+void sendStartCommand();
+void captureAndSendImage();
+
+void setup() {
+  Serial.begin(115200);
+  while (!Serial); // Wait for serial connection
+  Serial.println("\n\nStarting ESP32-CAM Attendance Client...");
+  Serial.println("Class Name: " + class_name);
+  Serial.printf("Initial Free Heap: %u bytes\n", ESP.getFreeHeap());
+
+  // --- Initialize Flash Pin ---
+  pinMode(FLASH_GPIO_NUM, OUTPUT);
+  digitalWrite(FLASH_GPIO_NUM, LOW); // Start with flash off
+  Serial.println("Flash LED pin initialized.");
+
+  // --- Construct Confirmation Topic ---
+  confirmationTopic = "attendance/confirm/" + class_name;
+  Serial.println("Confirmation Topic: " + confirmationTopic);
+
+  // Initialize camera
+  camera_config_t config;
+  config.ledc_channel = LEDC_CHANNEL_0;
+  config.ledc_timer = LEDC_TIMER_0;
+  config.pin_d0 = Y2_GPIO_NUM;
+  config.pin_d1 = Y3_GPIO_NUM;
+  config.pin_d2 = Y4_GPIO_NUM;
+  config.pin_d3 = Y5_GPIO_NUM;
+  config.pin_d4 = Y6_GPIO_NUM;
+  config.pin_d5 = Y7_GPIO_NUM;
+  config.pin_d6 = Y8_GPIO_NUM;
+  config.pin_d7 = Y9_GPIO_NUM;
+  config.pin_xclk = XCLK_GPIO_NUM;
+  config.pin_pclk = PCLK_GPIO_NUM;
+  config.pin_vsync = VSYNC_GPIO_NUM;
+  config.pin_href = HREF_GPIO_NUM;
+  config.pin_sscb_sda = SIOD_GPIO_NUM;
+  config.pin_sscb_scl = SIOC_GPIO_NUM;
+  config.pin_pwdn = PWDN_GPIO_NUM;
+  config.pin_reset = RESET_GPIO_NUM;
+  config.xclk_freq_hz = 20000000;
+  config.pixel_format = PIXFORMAT_JPEG; // Use JPEG for smaller size
+
+  // Frame size and quality
+  if(psramFound()){
+    Serial.println("PSRAM found. Using SVGA resolution, lower quality for MQTT.");
+    config.frame_size = FRAMESIZE_SVGA; // 800x600
+    config.jpeg_quality = 12; // Lower quality = smaller file size (0-63)
+    config.fb_count = 2;
+  } else {
+    Serial.println("No PSRAM found. Using QVGA resolution.");
+    config.frame_size = FRAMESIZE_QVGA; // 320x240 - Much smaller, better for no PSRAM
+    config.jpeg_quality = 10;
+    config.fb_count = 1;
+  }
+
+  esp_err_t err = esp_camera_init(&config);
+  if (err != ESP_OK) {
+    Serial.printf("Camera init failed with error 0x%x\n", err);
+    ESP.restart(); // Restart if camera fails
+    return;
+  }
+  Serial.println("Camera initialized successfully.");
+  Serial.printf("Free Heap after camera init: %u bytes\n", ESP.getFreeHeap());
+
+  // Set MQTT Server and Callback *before* connecting WiFi
+  client.setServer(mqtt_broker, mqtt_port);
+  client.setCallback(mqttCallback); // *** Set the callback function ***
+  Serial.println("MQTT client server and callback configured.");
+
+  // Set MQTT Buffer Size
+  if (!client.setBufferSize(MQTT_BUFFER_SIZE)) {
+       Serial.printf("Failed to set MQTT buffer size to %d bytes! Might cause issues with large images.\n", MQTT_BUFFER_SIZE);
+       Serial.printf("Free Heap after failed buffer set: %u bytes\n", ESP.getFreeHeap());
+  } else {
+       Serial.printf("MQTT buffer size successfully set to %d bytes.\n", MQTT_BUFFER_SIZE);
+       Serial.printf("Free Heap after successful buffer set: %u bytes\n", ESP.getFreeHeap());
+  }
+
+  // Connect to WiFi
+  Serial.print("Connecting to WiFi: ");
+  Serial.print(ssid);
+  WiFi.begin(ssid, password);
+  int wifi_retries = 0;
+  while (WiFi.status() != WL_CONNECTED && wifi_retries < 30) { // Increased timeout
+    delay(500);
+    Serial.print(".");
+    wifi_retries++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nWiFi connected");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+    Serial.printf("Free Heap after WiFi connect: %u bytes\n", ESP.getFreeHeap());
+    // Connect to MQTT now that WiFi is up
+    reconnect();
+  } else {
+    Serial.println("\nWiFi connection failed! Restarting...");
+    delay(1000);
+    ESP.restart();
+  }
+
+  Serial.println("Setup complete. Waiting for commands...");
+  Serial.println("Send 's' to start session, 'q' to capture/send image.");
+}
+
+// Function to reconnect to MQTT broker and subscribe
+void reconnect() {
+  // Loop until we're reconnected
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    // Create a unique client ID
+    String clientId = "ESP32CAM-" + class_name + "-";
+    clientId += String(random(0xffff), HEX);
+
+    // Attempt to connect
+    if (client.connect(clientId.c_str())) {
+      Serial.println("connected");
+      // --- Subscribe to the confirmation topic ---
+      if (client.subscribe(confirmationTopic.c_str())) {
+          Serial.println("Subscribed to: " + confirmationTopic);
+      } else {
+          Serial.println("Failed to subscribe to confirmation topic!");
+      }
+       // --- Subscribe to other topics if needed (e.g., commands FROM server) ---
+       // client.subscribe("some/other/topic");
+
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" retrying in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
+
+// --- MQTT Message Callback ---
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.print("] ");
+
+  String receivedTopic = String(topic);
+
+  // Check if it's our confirmation topic
+  if (receivedTopic.equals(confirmationTopic)) {
+    Serial.print(" >> Confirmation Received! Payload: ");
+     // Print payload content (optional, for debugging)
+     for (int i = 0; i < length; i++) {
+       Serial.print((char)payload[i]);
+     }
+     Serial.println();
+
+     // --- Trigger Flash Blink ---
+     blinkFlash(3, 150); // Blink 3 times, 150ms on/off duration
+
+     // Optional: Parse JSON to get the name if needed later
+     // Requires ArduinoJson library: https://arduinojson.org/
+     /*
+     #include <ArduinoJson.h> // Add this include at the top
+
+     StaticJsonDocument doc; // Adjust size based on payload
+     DeserializationError error = deserializeJson(doc, payload, length);
+
+     if (error) {
+       Serial.print("deserializeJson() failed: ");
+       Serial.println(error.c_str());
+       return;
+     }
+
+     const char* status = doc["status"]; // "success"
+     const char* name = doc["name"]; // "RecognizedName"
+
+     if (status && strcmp(status, "success") == 0) {
+         Serial.print("Attendance confirmed for: ");
+         Serial.println(name ? name : "Unknown"); // Print name if available
+         // blinkFlash(3, 150); // Move blink here if only blinking on valid JSON
+     }
+     */
+
+  } else {
+     // Handle messages on other subscribed topics if any
+     Serial.println(" (Ignoring - Not confirmation topic)");
+  }
+}
+
+// --- Function to Blink the Flash LED ---
+void blinkFlash(int count, int delay_ms) {
+    Serial.println("Blinking flash...");
+    for (int i = 0; i < count; i++) {
+        digitalWrite(FLASH_GPIO_NUM, HIGH); // Turn flash ON
+        delay(delay_ms);
+        digitalWrite(FLASH_GPIO_NUM, LOW);  // Turn flash OFF
+        delay(delay_ms);
+    }
+    Serial.println("Flash blink finished.");
+}
+
+
+// Function to send the start command via MQTT
+void sendStartCommand() {
+  if (WiFi.status() != WL_CONNECTED) {
+     Serial.println("WiFi not connected. Cannot send start command.");
+     return;
+  }
+  if (!client.connected()) {
+    Serial.println("MQTT not connected. Attempting reconnect...");
+    reconnect(); // Try to reconnect
+    if (!client.connected()){
+       Serial.println("MQTT reconnect failed. Cannot send start command.");
+       return;
+    }
+  }
+
+  // Construct JSON payload
+  // Using String concatenation (careful with memory on ESP32)
+  String payload = "{\"class\":\"" + class_name + "\",\"email\":\"" + doctor_email + "\"}";
+
+  Serial.print("Publishing to attendance/start: ");
+  Serial.println(payload);
+
+  if (client.publish("attendance/start", payload.c_str())) {
+      Serial.println("Start command sent successfully.");
+  } else {
+      Serial.println("Failed to send start command.");
+      Serial.printf("MQTT Client State: %d\n", client.state());
+  }
+}
+
+// Function to capture an image and send it via MQTT
+void captureAndSendImage() {
+   if (WiFi.status() != WL_CONNECTED) {
+       Serial.println("WiFi not connected. Cannot send image.");
+       return;
+   }
+  if (!client.connected()) {
+    Serial.println("MQTT not connected. Attempting reconnect...");
+    reconnect(); // Try to reconnect
+    if (!client.connected()){
+       Serial.println("MQTT reconnect failed. Cannot send image.");
+       return;
+    }
+  }
+
+  Serial.println("Capturing image...");
+  camera_fb_t * fb = NULL;
+  // Attempt to get frame buffer multiple times if it fails initially
+  for (int i=0; i<3; i++) {
+      fb = esp_camera_fb_get();
+      if(fb) break;
+      Serial.println("Camera capture failed, retrying...");
+      delay(1000); // Wait before retrying
+  }
+
+  if(!fb) {
+    Serial.println("Camera capture failed after multiple retries.");
+    return;
+  }
+  Serial.printf("Image captured: %zu bytes, format: %d\n", fb->len, fb->format);
+
+  if (fb->format != PIXFORMAT_JPEG) {
+      Serial.println("Captured image is not JPEG format!");
+      esp_camera_fb_return(fb); // Return the buffer
+      return;
+  }
+  if (fb->len == 0) {
+      Serial.println("Captured image has zero length!");
+      esp_camera_fb_return(fb); // Return the buffer
+      return;
+  }
+
+  // --- Base64 Encoding using the String method from base64.h ---
+  Serial.println("Encoding image to Base64...");
+  unsigned long encode_start_time = millis();
+
+  String base64_str = base64::encode(fb->buf, fb->len); // Use the String-based encode
+
+  unsigned long encode_end_time = millis();
+
+  // Check if encoding produced an empty string (could happen on error or 0-length input)
+   if (base64_str.length() == 0 && fb->len > 0) {
+      Serial.println("Base64 encoding resulted in an empty string!");
+      esp_camera_fb_return(fb); // Return the buffer
+      return;
+   }
+  Serial.printf("Base64 encoding took %lu ms. Encoded size: %d bytes\n", encode_end_time - encode_start_time, base64_str.length());
+  // --- End Base64 Encoding ---
+
+  // Return the frame buffer *after* encoding is done
+  esp_camera_fb_return(fb);
+  fb = NULL; // Mark buffer as returned
+
+
+  // --- Construct JSON Payload ---
+  String payloadStart = "{\"class\":\"" + class_name + "\",\"image\":\"";
+  String payloadEnd = "\"}";
+  // Calculate total size (be mindful of String overhead, this is approximate)
+  unsigned int totalPayloadSize = payloadStart.length() + base64_str.length() + payloadEnd.length();
+
+  Serial.printf("Calculated total payload size: %u bytes\n", totalPayloadSize);
+  // PubSubClient's default max packet size is often 256. Need > buffer size.
+  Serial.printf("MQTT Client Buffer Size: %d bytes\n", MQTT_BUFFER_SIZE);
+
+
+  if (totalPayloadSize > MQTT_BUFFER_SIZE) {
+      Serial.printf("Error: Estimated payload size (%u) exceeds MQTT client buffer size (%d). Reduce image size/quality or increase MQTT_BUFFER_SIZE.\n", totalPayloadSize, MQTT_BUFFER_SIZE);
+      // base64_str will go out of scope and be cleaned up
+      return;
+  }
+
+  Serial.println("Publishing image to attendance/image...");
+  Serial.printf("Free Heap before publish: %u bytes\n", ESP.getFreeHeap());
+  unsigned long publish_start_time = millis();
+
+  // Use beginPublish/print/endPublish for potentially better handling of large Strings
+  if (!client.beginPublish("attendance/image", totalPayloadSize, false)) { // `false` means not retained
+        Serial.println("Failed to begin MQTT publish transaction! Check buffer size and connection.");
+        // base64_str goes out of scope
+        return;
+  }
+
+  // Send payload parts
+  client.print(payloadStart);
+  client.print(base64_str); // Send the base64 String
+  client.print(payloadEnd);
+
+  // Finalize publish
+  bool published = client.endPublish();
+  unsigned long publish_end_time = millis();
+
+  if(published) {
+    Serial.printf("Image payload sent successfully in %lu ms.\n", publish_end_time - publish_start_time);
+  } else {
+    Serial.println("Failed to send image payload (endPublish failed). Check connection and broker status.");
+    Serial.printf("MQTT Client State: %d\n", client.state());
+  }
+  Serial.printf("Free Heap after publish attempt: %u bytes\n", ESP.getFreeHeap());
+
+  // --- Cleanup ---
+  // String base64_str goes out of scope here and its memory is automatically freed.
+  // Frame buffer fb was already returned after encoding.
+  // --- End Cleanup ---
+
+  // Add a small delay to allow MQTT processing and background tasks
+  delay(100);
+  Serial.printf("Free Heap after cleanup: %u bytes\n", ESP.getFreeHeap());
+}
+void loop() {
+  // Ensure MQTT connection is maintained
+  if (WiFi.status() == WL_CONNECTED && !client.connected()) {
+    reconnect();
+  }
+  // Allow the MQTT client to process incoming messages & maintain connection
+  client.loop(); // VERY IMPORTANT: Call this frequently
+
+  // Check for Serial Input
+  if (Serial.available() > 0) {
+    char incomingChar = Serial.read();
+
+    if (incomingChar == 's') {
+      Serial.println("Serial command 's' received: Sending start command...");
+      sendStartCommand();
+    } else if (incomingChar == 'q') {
+      Serial.println("Serial command 'q' received: Capturing and sending image...");
+      captureAndSendImage();
+    } else if (incomingChar != '\n' && incomingChar != '\r') { // Ignore newline/carriage return
+        Serial.print("Received unrecognized character: ");
+        Serial.println(incomingChar);
+    }
+
+    // Clear any remaining characters in the buffer
+    while(Serial.available() > 0) {
+        Serial.read();
+    }
+  }
+
+  // Yield for background tasks (WiFi, etc.) - adjust delay as needed
+  delay(10);
+}

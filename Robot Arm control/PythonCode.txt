@@ -1,0 +1,146 @@
+import tkinter as tk
+from tkinter import ttk, messagebox
+import paho.mqtt.client as mqtt
+
+# MQTT connection settings (update with your MQTT broker details)
+MQTT_BROKER = "192.168.135.203"  # Change to your MQTT broker IP address
+MQTT_PORT = 1883
+MQTT_COMMAND_TOPIC = "robotic_arm/command"
+MQTT_RESPONSE_TOPIC = "robotic_arm/response"
+
+
+class RoboticArmGUI:
+    def __init__(self, master):
+        self.master = master
+        master.title("Robotic Arm Control")
+
+        # Set overall background color for the main window
+        master.configure(bg="#f0f0f0")
+
+        # Create and configure a style for ttk widgets
+        style = ttk.Style(master)
+        style.theme_use("clam")
+        style.configure("TFrame", background="#f0f0f0")
+        style.configure("TLabel", background="#f0f0f0", foreground="#333333", font=("Helvetica", 12))
+        style.configure("TButton", background="#4CAF50", foreground="white", font=("Helvetica", 12))
+        style.map("TButton", background=[("active", "#45a049")])
+        style.configure("TCombobox", font=("Helvetica", 12))
+
+        # MQTT client setup
+        self.client = mqtt.Client()
+        self.client.on_connect = self.on_connect
+        self.client.on_message = self.on_message
+
+        try:
+            self.client.connect(MQTT_BROKER, MQTT_PORT, 60)
+        except Exception as e:
+            messagebox.showerror("MQTT Connection Error", str(e))
+            master.destroy()
+            return
+
+        self.client.loop_start()
+
+        # Create GUI Components using ttk for a modern look
+        self.command_label = ttk.Label(master, text="Select Command:")
+        self.command_label.grid(row=0, column=0, padx=10, pady=5, sticky="w")
+
+        self.command_var = tk.StringVar()
+        # Command mapping: command description to its code (as used in the ESP32 code)
+        self.commands = {
+            "Home (1)": "1",
+            "Pickup (2)": "2",
+            "Open Clamp (3)": "3",
+            "Close Clamp (4)": "4",
+            "Pick from Shelf (5)": "5",  # Requires row and column
+            "Place to Shelf (6)": "6",  # Requires row and column
+            "Test IK (7)": "7",  # Requires x, y, z coordinates
+            "Manual Control (8)": "8"  # Requires base, shoulder, elbow angles (in degrees)
+        }
+        self.command_menu = ttk.Combobox(master, textvariable=self.command_var,
+                                         values=list(self.commands.keys()), state="readonly")
+        self.command_menu.grid(row=0, column=1, padx=10, pady=5)
+        self.command_menu.bind("<<ComboboxSelected>>", self.update_fields)
+
+        # Frame for dynamic parameter inputs (using ttk.Frame)
+        self.params_frame = ttk.Frame(master, padding=10, style="TFrame")
+        self.params_frame.grid(row=1, column=0, columnspan=2, padx=10, pady=5, sticky="we")
+
+        # Dictionary to hold dynamic parameter entry fields
+        self.param_entries = {}
+
+        # Response display using a Label and a Text widget
+        self.response_label = ttk.Label(master, text="Responses:")
+        self.response_label.grid(row=2, column=0, padx=10, pady=5, sticky="nw")
+        self.response_text = tk.Text(master, height=10, width=40, font=("Helvetica", 12),
+                                      bg="white", fg="#333333", relief="flat", borderwidth=2)
+        self.response_text.grid(row=2, column=1, padx=10, pady=5)
+        self.response_text.configure(state="normal")
+
+        # Send Button using ttk.Button
+        self.send_button = ttk.Button(master, text="Send Command", command=self.send_command)
+        self.send_button.grid(row=3, column=0, columnspan=2, padx=10, pady=10)
+
+    def on_connect(self, client, userdata, flags, rc):
+        self.client.subscribe(MQTT_RESPONSE_TOPIC)
+        self.append_response("Connected to MQTT Broker (rc=" + str(rc) + ")")
+
+    def on_message(self, client, userdata, msg):
+        message = msg.payload.decode()
+        self.append_response(f"Response: {message}")
+
+    def append_response(self, text):
+        self.response_text.insert(tk.END, text + "\n")
+        self.response_text.see(tk.END)
+
+    def clear_params(self):
+        # Clear any existing parameter fields
+        for widget in self.params_frame.winfo_children():
+            widget.destroy()
+        self.param_entries = {}
+
+    def update_fields(self, event):
+        self.clear_params()
+        cmd_key = self.command_var.get()
+        cmd_code = self.commands[cmd_key]
+
+        fields = []
+        if cmd_code in ["5", "6"]:
+            fields = [("Row", "0-2"), ("Column", "0-2")]
+        elif cmd_code == "7":
+            fields = [("X (cm)", "float"), ("Y (cm)", "float"), ("Z (cm)", "float")]
+        elif cmd_code == "8":
+            fields = [("Base (°)", "float"), ("Shoulder (°)", "float"), ("Elbow (°)", "float")]
+
+        # Create labels and entry widgets for each parameter using ttk widgets
+        for idx, (label_text, placeholder) in enumerate(fields):
+            label = ttk.Label(self.params_frame, text=label_text + ":")
+            label.grid(row=idx, column=0, padx=5, pady=5, sticky="w")
+            entry = ttk.Entry(self.params_frame, font=("Helvetica", 12))
+            entry.grid(row=idx, column=1, padx=5, pady=5)
+            self.param_entries[label_text] = entry
+
+    def send_command(self):
+        cmd_key = self.command_var.get()
+        if not cmd_key:
+            messagebox.showwarning("Input Error", "Please select a command.")
+            return
+        cmd_code = self.commands[cmd_key]
+        params = []
+        for key, entry in self.param_entries.items():
+            value = entry.get().strip()
+            if value == "":
+                messagebox.showwarning("Input Error", f"Please provide value for {key}.")
+                return
+            params.append(value)
+        # Construct the command string (fields separated by a space)
+        command_str = cmd_code
+        if params:
+            command_str += " " + " ".join(params)
+        self.client.publish(MQTT_COMMAND_TOPIC, command_str)
+        self.append_response("Sent: " + command_str)
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = RoboticArmGUI(root)
+    root.mainloop()

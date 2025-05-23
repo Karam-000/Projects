@@ -1,0 +1,339 @@
+CUSTOMER API v1.2
+=================
+
+BASE URL: /api/customer
+API Version: 1.2  
+Last Updated: 2023-11-15
+
+PERFORMANCE METRICS:
+- Average Response Time: 150-400ms
+- Throughput: 600-900 requests/second
+- Rate Limits: 200 requests/min per endpoint
+- Max Cart Items: 50
+- Max Delivery Locations: 10
+
+REQUIRED HEADERS:
+- Content-Type: application/json
+- Accept: application/json
+- Authorization: Bearer {token}
+
+SECURITY:
+- All routes require valid JWT token
+- Token must have 'customer' role
+- Sensitive operations require re-authentication
+
+
+1. PRODUCT ROUTES
+-----------------
+
+1.1 GET /products
+Returns paginated list of available products
+
+Query Parameters:
+?page=number (default: 1)
+?limit=number (default: 20)
+?sort=price|name|popularity (default: name)
+?order=asc|desc (default: asc)
+
+Success Response (200):
+{
+  "status": "success",
+  "data": [
+    {
+      "id": "string",
+      "name": "string",
+      "description": "string",
+      "price": number,
+      "category": "string",
+      "stock": number,
+      "imageUrl": "string"
+    }
+  ],
+  "meta": {
+    "totalItems": number,
+    "totalPages": number,
+    "currentPage": number,
+    "itemsPerPage": number
+  }
+}
+
+Error Responses:
+400 Bad Request:
+{
+  "error": "VALIDATION_ERROR",
+  "message": "Invalid query parameters",
+  "details": ["limit must be between 1 and 50"]
+}
+
+401 Unauthorized:
+{
+  "error": "AUTH_REQUIRED",
+  "message": "Valid JWT token required"
+}
+
+429 Too Many Requests:
+{
+  "error": "RATE_LIMIT",
+  "message": "Too many requests",
+  "retryAfter": "1 minute"
+}
+
+1.2 GET /searchProduct
+Search products by name/description
+
+Query Parameters:
+?q=search_term
+
+Success Response (200):
+{
+  "status": "success",
+  "data": [matching products],
+  "meta": {
+    "search_term": "string",
+    "results_count": number
+  }
+}
+
+2. CART ROUTES
+--------------
+
+2.1 POST /addToCart
+Add product to cart
+
+Request Body:
+{
+  "inventoryId": "string (required)",
+  "quantity": number (required)
+}
+
+Success Response (200):
+{
+  "success": true,
+  "message": "Product added to cart"
+}
+
+2.2 POST /decrementCart
+Decrease item quantity in cart
+
+Request Body:
+{
+  "inventoryId": "string (required)"
+}
+
+Success Response (200):
+{
+  "success": true,
+  "message": "Cart item decremented"
+}
+
+2.3 POST /removeCart
+Remove item from cart
+
+Request Body:
+{
+  "inventoryId": "string (required)"
+}
+
+Success Response (200):
+{
+  "success": true,
+  "message": "Cart item removed"
+}
+
+2.4 GET /cart
+Get all cart items
+
+Success Response (200):
+{
+  "success": true,
+  "totalItems": number,
+  "items": [array of cart items]
+}
+
+3. ORDER ROUTES
+---------------
+
+3.1 POST /placeOrder
+Checkout and place order
+
+Request Body:
+{
+  "branchId": "string (required)",
+  "deliveryLocationId": "string (required)",
+  "paymentId": "string (required)"
+}
+
+Success Response (200):
+{
+  "success": true,
+  "message": "Order placed successfully",
+  "order": order_details
+}
+
+4. ACCOUNT MANAGEMENT
+---------------------
+
+4.1 GET /getCustomerInfo
+Get customer details
+
+Success Response (200):
+{
+  customer_details_object
+}
+
+4.2 PATCH /updateCustomerInfo
+Update customer information
+
+Request Body:
+{
+  "CustomerID": "string (required)",
+  "updates": {
+    "Email": "string",
+    "PhoneNumber": "string",
+    "Address": "string"
+  }
+}
+
+Success Response (200):
+{
+  "success": true,
+  "message": "Customer updated successfully",
+  "updatedFields": updated_fields
+}
+
+4.3 DELETE /delete-account
+Delete customer account
+
+Request Body:
+{
+  "password": "string (required)"
+}
+
+Success Response (200):
+{
+  "success": true,
+  "message": "Account deleted successfully"
+}
+
+5. PAYMENT METHODS
+------------------
+
+5.1 POST /add-payment
+Add payment method
+
+Request Body:
+{
+  "paymentDetails": {
+    "CardNumber": "string",
+    "ExpiryDate": "string",
+    "CVV": "string"
+  }
+}
+
+Success Response (201):
+{
+  "success": true,
+  "message": "Payment added successfully"
+}
+
+5.2 PATCH /update-payment
+Update payment method
+
+Request Body:
+{
+  "paymentId": "string (required)",
+  "updates": {
+    payment_fields_to_update
+  }
+}
+
+Success Response (200):
+{
+  "success": true,
+  "message": "Payment updated successfully"
+}
+
+5.3 DELETE /delete-payment
+Remove payment method
+
+Request Body:
+{
+  "paymentId": "string (required)"
+}
+
+Success Response (200):
+{
+  "success": true,
+  "message": "Payment deleted successfully"
+}
+
+5.4 GET /get-payment
+List payment methods
+
+Success Response (200):
+{
+  "success": true,
+  "payments": [array_of_payment_methods]
+}
+
+6. DELIVERY LOCATIONS
+---------------------
+
+6.1 POST /add-delivery-location
+Add delivery address
+
+Request Body:
+{
+  "location": {
+    "AddressLine1": "string",
+    "AddressLine2": "string",
+    "City": "string",
+    "PostalCode": "string"
+  }
+}
+
+Success Response (201):
+{
+  "success": true,
+  "message": "Delivery location added successfully"
+}
+
+6.2 PATCH /update-delivery-location
+Update address
+
+Request Body:
+{
+  "deliveryLocationID": "string (required)",
+  "updates": {
+    address_fields_to_update
+  }
+}
+
+Success Response (200):
+{
+  "success": true,
+  "message": "Delivery location updated successfully"
+}
+
+6.3 DELETE /delete-delivery-location
+Remove address
+
+Request Body:
+{
+  "deliveryLocationID": "string (required)"
+}
+
+Success Response (200):
+{
+  "success": true,
+  "message": "Delivery location deleted successfully"
+}
+
+6.4 GET /get-delivery-locations
+List addresses
+
+Success Response (200):
+{
+  "success": true,
+  "locations": [array_of_addresses]
+}

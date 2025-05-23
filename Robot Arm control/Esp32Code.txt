@@ -1,0 +1,1058 @@
+/*
+ * Robotic Arm Control Software for ESP32 using MQTT and WiFiManager
+ * Sequential Movement Approach (Base->Shoulder/Elbow for approach, reverse for retreat)
+ * 
+ * Connection Diagram:
+ * 
+ * ESP32 Microcontroller           PCA9685 PWM Driver
+ * |-------------------|           |---------------|
+ * |              3V3  |---------->| VCC           |
+ * |              GND  |---------->| GND           |
+ * | GPIO21 (SDA)      |---------->| SDA           |
+ * | GPIO22 (SCL)      |---------->| SCL           |
+ * |-------------------|           |---------------|
+ *                                  |  |  |  |  |
+ * Servo Connections (PCA9685 Channels):
+ * Channel 0 -> Base Servo
+ * Channel 1 -> Shoulder Servo
+ * Channel 2 -> Elbow Servo
+ * Channel 3 -> Clamp Servo
+ * 
+ * Clamp Microswitch:
+ * GPIO15 -> Switch Signal (Pull-up)
+ * GND    -> Switch Ground
+ */
+#include <WiFi.h>
+#include <WiFiManager.h> // https://github.com/tzapu/WiFiManager
+#include <PubSubClient.h>
+#include <Wire.h>
+#include <Adafruit_PWMServoDriver.h>
+#include <math.h>
+#include <vector>      // Include for std::max
+#include <initializer_list> // Required for std::max with {} in older compilers if needed
+
+// MQTT Configuration
+const char* mqtt_server = "raspberrypi.local"; // Change to your MQTT broker IP address
+const int mqtt_port = 1883;
+const char* mqtt_command_topic = "robotic_arm/command";
+const char* mqtt_response_topic = "robotic_arm/response";
+const char* mqttTopic = "complete/action";
+
+
+bool clampState = true; // Start assuming clamp is open after setup call
+bool pendingOrderMessage = false;
+bool pendingPickUpMessage = false;
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+// PWM Driver and servo settings
+Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
+
+// Servo Channels
+#define BASE_CHANNEL 0
+#define SHOULDER_CHANNEL 1
+#define ELBOW_CHANNEL 2
+#define CLAMP_CHANNEL 3
+
+// Clamp switch pin
+#define clampSwitch 15
+
+// Kinematic Parameters (Denavit-Hartenberg)
+const float a[3] = {0, 10.5, 17};  // Link lengths (cm)
+const float d[3] = {7, 0, 0};      // Link offsets (cm)
+
+// Joint Limits (radians) - Used by IK
+const float BASE_LIMITS[2]     = {-PI, PI};           // ±180° rotation
+const float SHOULDER_LIMITS[2] = {0, PI};            // 0-180° elevation
+const float ELBOW_LIMITS[2]    = {-3 * PI / 4, 0};    // -135° to 0° flexion (IK calculation range)
+
+// Servo Angle Limits (Degrees) - Physical constraints for servos
+const int BASE_SERVO_LIMITS[2]     = {0, 180};
+const int SHOULDER_SERVO_LIMITS[2] = {0, 180};
+const int ELBOW_SERVO_LIMITS[2]    = {0, 135}; // Elbow servo might only handle 0-135 physically
+const int CLAMP_SERVO_LIMITS[2]    = {0, 90}; // Clamp physical range
+
+// Operational Positions (cm)
+const float Pick_up[] = {0,-25, 12};      // Pickup/Drop-off location
+const float order[]= {0, 25, 7};
+const float startUp[] = {10, 0, 20};     // Home (startUp) position
+float thetas[3] = {0, 0, 0};             // Current joint angles (radians)
+
+// Shelf Coordinates [row][column][x,y,z]
+float shelf[3][3][3] = {
+  {{22, -9, 5}, {22, 0, 5}, {22, 9, 5}},     // Bottom shelf
+  {{22, -9, 15}, {22, 0, 15}, {22, 9, 15}},  // Middle shelf
+  {{22, -9, 25}, {22, 0, 25}, {22, 9, 25}}   // Top shelf
+};
+
+// Servo Calibration (Pulse width for 0 and 180 degrees)
+const int SERVO_MIN = 150; // Typically 0.5ms pulse
+const int SERVO_MAX = 600; // Typically 2.5ms pulse
+
+// Store CURRENT PWM values for smooth movement interpolation
+int currentPWM[4] = {
+    map(90, 0, 180, SERVO_MIN, SERVO_MAX), // Base initial PWM (90 degrees)
+    map(90, 0, 180, SERVO_MIN, SERVO_MAX), // Shoulder initial PWM (90 degrees)
+    map(45, 0, 180, SERVO_MIN, SERVO_MAX), // Elbow initial PWM (45 degreesmapped to servo range)
+    map(0, 0, 180, SERVO_MIN, SERVO_MAX)   // Clamp initial PWM (Open at 0 degrees)
+};
+
+int clampAngle = 0; // Store the last known clamp angle (0=open)
+const int MAX_CLAMP_ANGLE = CLAMP_SERVO_LIMITS[1]; // Max angle clamp tries (use servo limit)
+const int SMOOTH_MOVE_DELAY_MS = 7; // Delay for smooth movement steps
+const int ACTION_DELAY_MS = 500; // General delay after a movement sequence
+
+
+// --- Function Prototypes ---
+void setup();
+void loop();
+void reconnect();
+void mqttCallback(char* topic, byte* payload, unsigned int length);
+void processCommand(char* command);
+void smoothMoveShoulderElbow(int targetShoulderPWM, int targetElbowPWM);
+void smoothMoveServo(int channel, int targetAngle, int speed_unused);
+void setServoAngle(int channel, int targetAngle);
+void set_servos_approach(float angles[3]); // NEW: Base -> Sh/El
+void set_servos_retreat(float angles[3]);  // NEW: Sh/El -> Base
+void sendMQTTMessage();
+void sendMQTTMessageorder();
+bool inverse_kinematics(float target[3], float thetas_out[3]);
+float toDegrees(float rad);
+float toRadians(float deg); // Added helper
+void forward_kinematics(float current_thetas[3], float position[3]);
+void StartPosition(); // Will use retreat sequence
+void moveToPickup();  // Will use approach sequence
+void openClamp();
+void closeClamp();
+bool pickFromShelf(int row, int col);
+bool placeAtShelf(int row, int col);
+
+
+// --- Setup, Loop, MQTT, Command Processing (remain largely the same) ---
+void setup() {
+  pinMode(clampSwitch, INPUT);
+  Serial.begin(115200);
+  Serial.println("=== DEBUG: Initializing Robotic Arm (Sequential Movement) ===");
+
+  WiFiManager wifiManager;
+  Serial.println("DEBUG: Starting WiFiManager...");
+  // wifiManager.resetSettings(); // Uncomment to force re-configuration
+  if (!wifiManager.autoConnect("RoboticArmAP")) {
+      Serial.println("Failed to connect and hit timeout");
+      delay(3000);
+      ESP.restart(); // Restart if WiFi fails
+  }
+  Serial.print("DEBUG: Connected to WiFi. IP: ");
+  Serial.println(WiFi.localIP());
+
+
+  client.setServer(mqtt_server, mqtt_port);
+  client.setCallback(mqttCallback);
+  Serial.println("DEBUG: MQTT client initialized");
+
+  Wire.begin(21, 22); // Specify SDA, SCL pins if needed
+  Wire.setClock(400000); // Fast I2C
+  pwm.begin();
+  pwm.setPWMFreq(50); // Standard 50Hz for Servos
+  Serial.println("DEBUG: PWM driver initialized");
+
+  Serial.println("DEBUG: Setting initial clamp position...");
+  setServoAngle(CLAMP_CHANNEL, CLAMP_SERVO_LIMITS[0]); // Set to defined open limit
+  clampState = true;
+  clampAngle = CLAMP_SERVO_LIMITS[0];
+  Serial.println("DEBUG: Clamp set to OPEN position");
+  delay(ACTION_DELAY_MS);
+
+  Serial.println("DEBUG: Moving arm to initial HOME position...");
+  StartPosition(); // Use StartPosition which now calls the retreat sequence
+  delay(ACTION_DELAY_MS);
+  Serial.println("DEBUG: Arm initialized at HOME position.");
+
+  Serial.println("=== DEBUG: Robotic Arm Ready ===");
+  Serial.print("DEBUG: MQTT Subscribing to topic: ");
+  Serial.println(mqtt_command_topic);
+
+  reconnect(); // Connect to MQTT broker
+}
+
+void reconnect() {
+  // Loop until we're reconnected
+  while (!client.connected()) {
+    Serial.println("DEBUG: Attempting MQTT connection...");
+    // Create a random client ID
+    String clientId = "ESP32Client-";
+    clientId += String(random(0xffff), HEX);
+    // Attempt to connect
+    Serial.print("Attempting MQTT connection as ");
+    Serial.print(clientId);
+    Serial.print("...");
+    if (client.connect(clientId.c_str())) {
+      Serial.println(" connected");
+      // Subscribe
+      if(client.subscribe(mqtt_command_topic)){
+        Serial.println("DEBUG: Successfully subscribed to command topic.");
+      } else {
+        Serial.println("DEBUG: Failed to subscribe to command topic.");
+      }
+    } else {
+      Serial.print(" failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
+
+
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  Serial.println("DEBUG: MQTT message received");
+  char command[128];
+  // Ensure null termination
+  int msg_length = min((unsigned int)127, length);
+  memcpy(command, payload, msg_length);
+  command[msg_length] = '\0';
+  Serial.print("DEBUG: MQTT Command received: ");
+  Serial.println(command);
+
+  processCommand(command);
+}
+
+void loop() {
+  
+  if (!client.connected()) {
+    reconnect();
+  }
+  client.loop(); // Process MQTT messages
+  // Add any other periodic tasks here if needed
+    // Resend message if it was pending and now connected
+    if (pendingOrderMessage && client.connected()) {
+        sendMQTTMessageorder();  // Try again
+    }
+     if (pendingPickUpMessage && client.connected()) {
+        sendMQTTMessage();  // Try again
+    }
+}
+//complete/action doneArm
+
+void sendMQTTMessage() {
+    if (client.connected()) {
+        const char* message = "DoneArm";  // Use double quotes for a string
+        client.publish("complete/action", message);
+        Serial.println("Message sent: " + String(message));
+        pendingPickUpMessage = false;  // Set flag to resend later
+    } else {
+        Serial.println("MQTT not connected!");
+        pendingPickUpMessage = true;  // Set flag to resend later
+    }
+    }
+
+void sendMQTTMessageorder() {
+    if (client.connected()) {
+        const char* message = "DoneArmOrder";
+        client.publish("complete/action", message);
+        Serial.println("Message sent: " + String(message));
+        pendingOrderMessage = false;  // Message sent, clear the flag
+    } else {
+        Serial.println("MQTT not connected! Will try again after reconnect.");
+        pendingOrderMessage = true;  // Set flag to resend later
+    }
+}
+
+void processCommand(char* command) {
+  Serial.println("DEBUG: Processing command...");
+  char* argv[10];
+  int argc = 0;
+
+  // Simple strtok based parsing
+  argv[argc] = strtok(command, " ");
+  while (argv[argc] != NULL && argc < 9) {
+    argv[++argc] = strtok(NULL, " ");
+  }
+  // argv[argc] = NULL; // Not strictly necessary
+
+  if (argc == 0 || argv[0] == NULL) {
+    Serial.println("DEBUG: Empty command, ignoring...");
+    return;
+  }
+
+  // Use strtol for robust number parsing
+  char *endptr;
+  errno = 0; // Reset errno before calling strtol
+  long cmd_l = strtol(argv[0], &endptr, 10);
+
+  // Check for conversion errors
+  if (endptr == argv[0] || *endptr != '\0' || errno == ERANGE || errno == EINVAL) {
+       Serial.println("DEBUG: Invalid command ID format.");
+       client.publish(mqtt_response_topic, "CMD Invalid: FAILED - Bad ID Format");
+       return;
+   }
+   int cmd = (int)cmd_l;
+
+  bool success = true;
+  char response[128];
+
+  Serial.print("DEBUG: Command ID: ");
+  Serial.println(cmd);
+
+  switch(cmd) {
+    case 1: StartPosition(); break; // Uses retreat sequence now
+    case 2: moveToPickup(); break;  // Uses approach sequence now
+    case 3: openClamp(); break;
+    case 4: closeClamp(); break;
+    case 5: // Pick
+      if (argc >= 3) {
+          errno = 0; long r = strtol(argv[1], NULL, 10); bool err_r = errno != 0;
+          errno = 0; long c = strtol(argv[2], NULL, 10); bool err_c = errno != 0;
+          if(err_r || err_c) {success=false; Serial.println("ERR: Invalid row/col for pick.");}
+          else success = pickFromShelf(r, c);
+      } else { success = false; Serial.println("ERR: Insufficient args for pick."); }
+      break;
+    case 6: // Place
+       if (argc >= 3) {
+          errno = 0; long r = strtol(argv[1], NULL, 10); bool err_r = errno != 0;
+          errno = 0; long c = strtol(argv[2], NULL, 10); bool err_c = errno != 0;
+          if(err_r || err_c) {success=false; Serial.println("ERR: Invalid row/col for place.");}
+          else success = placeAtShelf(r, c);
+       } else { success = false; Serial.println("ERR: Insufficient args for place."); }
+       break;
+    case 7: // IK Test (Direct Move - use Approach sequence)
+       if (argc >= 4) {
+            float x, y, z;
+            char *eptr;
+            x = strtof(argv[1], &eptr); if (*eptr != '\0') { success = false; break; }
+            y = strtof(argv[2], &eptr); if (*eptr != '\0') { success = false; break; }
+            z = strtof(argv[3], &eptr); if (*eptr != '\0') { success = false; break; }
+            Serial.printf("DEBUG: Executing TEST IK command at x=%.2f, y=%.2f, z=%.2f (using APPROACH sequence)\n", x, y, z);
+            float target[3] = {x, y, z}; float calculated_thetas[3];
+            if (inverse_kinematics(target, calculated_thetas)) {
+                snprintf(response, sizeof(response), "IK Target: (%.1f,%.1f,%.1f) -> Angles: B%.1f S%.1f E%.1f", x, y, z, toDegrees(calculated_thetas[0]) + 90.0f, toDegrees(calculated_thetas[1]), toDegrees(-calculated_thetas[2]));
+                client.publish(mqtt_response_topic, response);
+                // Update global thetas ONLY if move is successful
+                thetas[0] = calculated_thetas[0]; thetas[1] = calculated_thetas[1]; thetas[2] = calculated_thetas[2];
+                set_servos_approach(thetas); // Use APPROACH sequence
+            } else {
+                snprintf(response, sizeof(response), "IK Target: (%.1f,%.1f,%.1f) -> FAILED (Unreachable)", x, y, z);
+                client.publish(mqtt_response_topic, response); success = false;
+            }
+       } else { success = false; Serial.println("ERR: Insufficient args for IK test."); }
+       break;
+    case 8: // Manual Angle Control (Direct Move - use Approach sequence)
+       if (argc >= 4) {
+            float base_deg, shoulder_deg, elbow_deg;
+            char *eptr;
+            base_deg = strtof(argv[1], &eptr); if (*eptr != '\0') { success = false; break; }
+            shoulder_deg = strtof(argv[2], &eptr); if (*eptr != '\0') { success = false; break; }
+            elbow_deg = strtof(argv[3], &eptr); if (*eptr != '\0') { success = false; break; }
+            Serial.printf("DEBUG: Executing MANUAL CONTROL command: B=%.1f, S=%.1f, E=%.1f (using APPROACH sequence)\n", base_deg, shoulder_deg, elbow_deg);
+            // Convert degrees to IK radians
+            thetas[0] = toRadians(base_deg - 90.0f);
+            thetas[1] = toRadians(shoulder_deg);
+            thetas[2] = toRadians(-elbow_deg); // IK elbow is negative of servo elbow
+            set_servos_approach(thetas); // Use APPROACH sequence
+       } else { success = false; Serial.println("ERR: Insufficient args for manual control."); }
+       break;
+    default:
+      Serial.print("DEBUG: Unknown command ID: "); Serial.println(cmd);
+      success = false;
+  }
+
+  // Send general success/fail response for commands that don't send specific results
+  if (cmd != 7) { // IK test sends its own response
+    snprintf(response, sizeof(response), "CMD %d: %s", cmd, success ? "SUCCESS" : "FAILED");
+    client.publish(mqtt_response_topic, response);
+  }
+   if (!success) { // Log failures locally
+       Serial.printf("DEBUG: Command %d FAILED.\n", cmd);
+   } else {
+       Serial.printf("DEBUG: Command %d SUCCESS.\n", cmd);
+   }
+}
+
+
+// --- Core Movement and Kinematics Functions ---
+
+/*
+ * Helper: Simultaneous smooth movement of Shoulder and Elbow ONLY
+ */
+void smoothMoveShoulderElbow(int targetShoulderPWM, int targetElbowPWM) {
+    // Get current positions
+    int currentShoulderPWM = currentPWM[SHOULDER_CHANNEL];
+    int currentElbowPWM = currentPWM[ELBOW_CHANNEL];
+
+    // Calculate differences and find the maximum difference (steps needed)
+    int diffShoulder = abs(targetShoulderPWM - currentShoulderPWM);
+    int diffElbow = abs(targetElbowPWM - currentElbowPWM);
+    // Use std::max with initializer list (requires <initializer_list> potentially)
+    int maxSteps = std::max({diffShoulder, diffElbow});
+
+
+    Serial.print("DEBUG: Smooth Move Shoulder/Elbow - Steps: "); Serial.println(maxSteps);
+    Serial.print("DEBUG: Shoulder PWM: "); Serial.print(currentShoulderPWM); Serial.print(" -> "); Serial.println(targetShoulderPWM);
+    Serial.print("DEBUG: Elbow PWM: "); Serial.print(currentElbowPWM); Serial.print(" -> "); Serial.println(targetElbowPWM);
+
+    if (maxSteps == 0) {
+        Serial.println("DEBUG: Shoulder/Elbow already at target position.");
+        return; // Already at target
+    }
+
+    // Interpolate positions over the required steps
+    for (int step = 1; step <= maxSteps; ++step) {
+        // Calculate intermediate positions only for Shoulder and Elbow
+        int posShoulder = currentShoulderPWM + (long)(targetShoulderPWM - currentShoulderPWM) * step / maxSteps;
+        int posElbow = currentElbowPWM + (long)(targetElbowPWM - currentElbowPWM) * step / maxSteps;
+
+        // Set PWM only for Shoulder and Elbow
+        pwm.setPWM(SHOULDER_CHANNEL, 0, posShoulder);
+        pwm.setPWM(ELBOW_CHANNEL, 0, posElbow);
+
+        delay(SMOOTH_MOVE_DELAY_MS); // Small delay for each step
+    }
+
+    // Ensure final positions are set exactly
+    pwm.setPWM(SHOULDER_CHANNEL, 0, targetShoulderPWM);
+    pwm.setPWM(ELBOW_CHANNEL, 0, targetElbowPWM);
+
+    // Update the global current PWM values for Shoulder and Elbow
+    currentPWM[SHOULDER_CHANNEL] = targetShoulderPWM;
+    currentPWM[ELBOW_CHANNEL] = targetElbowPWM;
+
+    Serial.println("DEBUG: Shoulder/Elbow movement completed.");
+}
+
+
+/*
+ * Helper: Individual smooth move - Used for Base and Clamp
+ */
+void smoothMoveServo(int channel, int targetAngle, int speed_unused) {
+  // Speed parameter is ignored, using fixed delay
+  Serial.print("DEBUG: Smoothly moving servo on channel=");
+  Serial.print(channel);
+  Serial.print(" to targetAngle=");
+  Serial.println(targetAngle);
+
+  // Clamp target angle to servo limits
+  int minLimit = (channel == CLAMP_CHANNEL) ? CLAMP_SERVO_LIMITS[0] : BASE_SERVO_LIMITS[0];
+  int maxLimit = (channel == CLAMP_CHANNEL) ? CLAMP_SERVO_LIMITS[1] : BASE_SERVO_LIMITS[1];
+  int clampedTargetAngle = constrain(targetAngle, minLimit, maxLimit);
+  if(clampedTargetAngle != targetAngle){
+      Serial.printf("WARN: Target angle %d for channel %d clamped to %d\n", targetAngle, channel, clampedTargetAngle);
+  }
+
+  int targetPWM = map(clampedTargetAngle, 0, 180, SERVO_MIN, SERVO_MAX);
+  int current = currentPWM[channel];
+  int steps = abs(targetPWM - current);
+
+  if (steps <= 1) { // Allow for small rounding diffs
+      Serial.println("DEBUG: Single Servo already at target angle (or close). Setting directly.");
+      pwm.setPWM(channel, 0, targetPWM); // Ensure final position
+      currentPWM[channel] = targetPWM;   // Update current PWM
+      if(channel == CLAMP_CHANNEL) clampAngle = clampedTargetAngle; // Update clamp angle state
+      return; // Already there or very close
+  }
+
+  Serial.print("DEBUG: Servo Smooth Move - Steps: "); Serial.println(steps);
+  Serial.print("DEBUG: Servo PWM: "); Serial.print(current); Serial.print(" -> "); Serial.println(targetPWM);
+
+  // Calculate step increment using float for accuracy
+  float stepIncrement = (float)(targetPWM - current) / steps;
+  float currentPosition = current;
+
+  for (int i = 0; i < steps; ++i) {
+       currentPosition += stepIncrement;
+       pwm.setPWM(channel, 0, round(currentPosition));
+       delay(SMOOTH_MOVE_DELAY_MS);
+   }
+
+  pwm.setPWM(channel, 0, targetPWM); // Ensure final position
+  currentPWM[channel] = targetPWM;   // Update current PWM
+  if(channel == CLAMP_CHANNEL) clampAngle = clampedTargetAngle; // Update clamp angle state
+
+  Serial.println("DEBUG: Single Servo movement completed");
+}
+
+/*
+ * Set servo angle directly without smooth movement (Used for clamp initially)
+ */
+void setServoAngle(int channel, int targetAngle) {
+  // Clamp target angle to servo limits
+  int minLimit = (channel == CLAMP_CHANNEL) ? CLAMP_SERVO_LIMITS[0] : ((channel == ELBOW_CHANNEL) ? ELBOW_SERVO_LIMITS[0] : ((channel == SHOULDER_CHANNEL) ? SHOULDER_SERVO_LIMITS[0] : BASE_SERVO_LIMITS[0]));
+  int maxLimit = (channel == CLAMP_CHANNEL) ? CLAMP_SERVO_LIMITS[1] : ((channel == ELBOW_CHANNEL) ? ELBOW_SERVO_LIMITS[1] : ((channel == SHOULDER_CHANNEL) ? SHOULDER_SERVO_LIMITS[1] : BASE_SERVO_LIMITS[1]));
+  int clampedTargetAngle = constrain(targetAngle, minLimit, maxLimit);
+
+  int targetPWM = map(clampedTargetAngle, 0, 180, SERVO_MIN, SERVO_MAX);
+  pwm.setPWM(channel, 0, targetPWM);
+  currentPWM[channel] = targetPWM;
+  if(channel == CLAMP_CHANNEL) clampAngle = clampedTargetAngle; // Update clamp angle state
+  // Serial.printf("DEBUG: Servo (Direct) ch=%d angle=%d PWM=%d\n", channel, clampedTargetAngle, targetPWM);
+}
+
+/*
+ * NEW: Moves arm to target angles using APPROACH sequence: Base -> Shoulder/Elbow
+ */
+void set_servos_approach(float angles[3]) {
+  Serial.println("DEBUG: Executing APPROACH movement sequence (Base -> Sh/El)...");
+
+  // Convert radians (IK space) to degrees (Servo space) & apply constraints/offsets
+  // Base: IK [-PI, PI] -> Servo [0, 180] (Offset +90 deg)
+  int base_deg = constrain(round(toDegrees(angles[0]) + 95.0f), BASE_SERVO_LIMITS[0], BASE_SERVO_LIMITS[1]);
+  // Shoulder: IK [0, PI] -> Servo [0, 180] (Direct map)
+  int shoulder_deg = constrain(round(toDegrees(angles[1])), SHOULDER_SERVO_LIMITS[0], SHOULDER_SERVO_LIMITS[1]);
+  // Elbow: IK [-3PI/4, 0] -> Servo [0, 135] (Negate and map) - Use ELBOW_SERVO_LIMITS
+  int elbow_deg = constrain(round(toDegrees(-angles[2])), ELBOW_SERVO_LIMITS[0], ELBOW_SERVO_LIMITS[1]);
+
+  Serial.print("DEBUG: Target Angles (Degrees): Base="); Serial.print(base_deg);
+  Serial.print(", Shoulder="); Serial.print(shoulder_deg);
+  Serial.print(", Elbow="); Serial.println(elbow_deg);
+
+  // Map degrees to PWM values
+  int targetBasePWM = map(base_deg, 0, 180, SERVO_MIN, SERVO_MAX);
+  int targetShoulderPWM = map(shoulder_deg, 0, 180, SERVO_MIN, SERVO_MAX);
+  // Map elbow degrees (e.g., 0-135) to the full servo PWM range (0-180 map)
+  int targetElbowPWM = map(elbow_deg, 0, 180, SERVO_MIN, SERVO_MAX);
+
+  // --- Execute APPROACH Sequence ---
+
+  // Step 1: Move Base
+  Serial.println("DEBUG: Moving Base...");
+  smoothMoveServo(BASE_CHANNEL, base_deg, 0); // Speed parameter is ignored
+  // This function blocks until Base movement is complete
+
+  // Step 2: Move Shoulder and Elbow simultaneously
+  Serial.println("DEBUG: Moving Shoulder and Elbow...");
+  smoothMoveShoulderElbow(targetShoulderPWM, targetElbowPWM);
+  // This function blocks until Shoulder/Elbow movement is complete
+
+  Serial.println("DEBUG: APPROACH movement sequence complete.");
+}
+
+/*
+ * NEW: Moves arm to target angles using RETREAT sequence: Shoulder/Elbow -> Base
+ */
+void set_servos_retreat(float angles[3]) {
+  Serial.println("DEBUG: Executing RETREAT movement sequence (Sh/El -> Base)...");
+
+  // Convert radians (IK space) to degrees (Servo space) & apply constraints/offsets
+  int base_deg = constrain(round(toDegrees(angles[0]) + 95.0f), BASE_SERVO_LIMITS[0], BASE_SERVO_LIMITS[1]);
+  int shoulder_deg = constrain(round(toDegrees(angles[1])), SHOULDER_SERVO_LIMITS[0], SHOULDER_SERVO_LIMITS[1]);
+  int elbow_deg = constrain(round(toDegrees(-angles[2])), ELBOW_SERVO_LIMITS[0], ELBOW_SERVO_LIMITS[1]);
+
+  Serial.print("DEBUG: Target Angles (Degrees): Base="); Serial.print(base_deg);
+  Serial.print(", Shoulder="); Serial.print(shoulder_deg);
+  Serial.print(", Elbow="); Serial.println(elbow_deg);
+
+  // Map degrees to PWM values
+  int targetBasePWM = map(base_deg, 0, 180, SERVO_MIN, SERVO_MAX);
+  int targetShoulderPWM = map(shoulder_deg, 0, 180, SERVO_MIN, SERVO_MAX);
+  int targetElbowPWM = map(elbow_deg, 0, 180, SERVO_MIN, SERVO_MAX);
+
+  // --- Execute RETREAT Sequence ---
+
+  // Step 1: Move Shoulder and Elbow simultaneously
+  Serial.println("DEBUG: Moving Shoulder and Elbow...");
+  smoothMoveShoulderElbow(targetShoulderPWM, targetElbowPWM);
+  // This function blocks until Shoulder/Elbow movement is complete
+
+  // Step 2: Move Base
+  Serial.println("DEBUG: Moving Base...");
+  smoothMoveServo(BASE_CHANNEL, base_deg, 0); // Speed parameter is ignored
+  // This function blocks until Base movement is complete
+
+  Serial.println("DEBUG: RETREAT movement sequence complete.");
+}
+
+
+// --- Kinematics (IK, FK, toDegrees, toRadians) ---
+bool inverse_kinematics(float target[3], float thetas_out[3]) {
+  // Serial.printf("DEBUG: IK Target: (%.2f, %.2f, %.2f)\n", target[0], target[1], target[2]); // Concise debug
+
+  float x = target[0], y = target[1], z = target[2];
+  float r_sq = x * x + y * y;
+  float r = sqrt(r_sq);
+  float z_proj = z - d[0]; // Z relative to shoulder base
+
+  // --- Theta 1 (Base) ---
+  float theta1 = atan2(y, x);
+  if(isnan(theta1) || theta1 < BASE_LIMITS[0] || theta1 > BASE_LIMITS[1]) {
+    Serial.printf("IK ERR: θ1 (%.1f deg) out of range [%.1f, %.1f]\n", toDegrees(theta1), toDegrees(BASE_LIMITS[0]), toDegrees(BASE_LIMITS[1]));
+    return false;
+  }
+
+  // --- Theta 3 (Elbow) using Law of Cosines ---
+  // Distance squared from shoulder joint (origin of link a1) to wrist (end of link a2)
+  float dist_sq = r * r + z_proj * z_proj;
+  // Check reachability based on link lengths
+  float max_reach_sq = (a[1] + a[2]) * (a[1] + a[2]);
+  float min_reach_sq = (a[1] > a[2]) ? (a[1] - a[2]) * (a[1] - a[2]) : (a[2] - a[1]) * (a[2] - a[1]); // Consider min reach if elbow folds back fully
+
+  // Basic reach check - more sophisticated checks might be needed near singularities
+   if (dist_sq > max_reach_sq || dist_sq < min_reach_sq) {
+       Serial.printf("IK ERR: Target distance (%.2f) potentially unreachable (Min: %.2f, Max: %.2f)\n", sqrt(dist_sq), sqrt(min_reach_sq), sqrt(max_reach_sq));
+       // return false; // Allow calculation attempt but warn
+   }
+
+
+  float D_numerator = dist_sq - a[1]*a[1] - a[2]*a[2];
+  float D_denominator = 2.0f * a[1] * a[2];
+  if (abs(D_denominator) < 1e-6) { // Avoid division by zero if links are zero length
+       Serial.println("IK ERR: Link lengths a1 or a2 are zero.");
+       return false;
+   }
+  float D = D_numerator / D_denominator;
+
+  // Clamp D to [-1, 1] to prevent domain errors in acos
+  if (D > 1.0f) D = 1.0f;
+  if (D < -1.0f) D = -1.0f;
+
+  // Calculate theta3 (elbow angle relative to the shoulder link)
+  // We typically want the "elbow down" or "elbow up" solution.
+  // Standard robotics convention often defines theta3 from the extension of link a1.
+  // acos(D) gives the angle *inside* the triangle elbow joint.
+  // The angle relative to the extension is PI - acos(D).
+  // However, our servos/limits might expect a different definition.
+  // Let's stick to the previous atan2 formulation which defines elbow angle relative to shoulder link,
+  // aiming for the negative solution (elbow flexion).
+  float theta3 = atan2(-sqrt(max(0.0f, 1.0f - D*D)), D); // Elbow flexion angle
+
+  if(isnan(theta3) || theta3 < ELBOW_LIMITS[0] || theta3 > ELBOW_LIMITS[1]) {
+    Serial.printf("IK ERR: θ3 (%.1f deg) out of range [%.1f, %.1f]\n", toDegrees(theta3), toDegrees(ELBOW_LIMITS[0]), toDegrees(ELBOW_LIMITS[1]));
+    return false;
+  }
+
+  // --- Theta 2 (Shoulder) ---
+  // Angle of the line from shoulder joint to wrist
+  float gamma = atan2(z_proj, r);
+  // Angle inside the triangle at the shoulder joint (between a1 and line to wrist)
+  // Using atan2(opposite, adjacent) from law of sines/cosines derivation
+  float phi_numerator = a[2] * sin(theta3); // Be careful with theta3 definition sign
+  float phi_denominator = a[1] + a[2] * cos(theta3);
+  float phi = atan2(phi_numerator, phi_denominator);
+
+  float theta2 = gamma - phi; // Angle relative to the horizontal plane
+
+  if(isnan(theta2) || theta2 < SHOULDER_LIMITS[0] || theta2 > SHOULDER_LIMITS[1]) {
+    Serial.printf("IK ERR: θ2 (%.1f deg) out of range [%.1f, %.1f]\n", toDegrees(theta2), toDegrees(SHOULDER_LIMITS[0]), toDegrees(SHOULDER_LIMITS[1]));
+    return false;
+  }
+
+  // Success
+  thetas_out[0] = theta1;
+  thetas_out[1] = theta2;
+  thetas_out[2] = theta3;
+  // Serial.printf("DEBUG: IK Success: B=%.1f, S=%.1f, E=%.1f (rad)\n", theta1, theta2, theta3);
+  return true;
+}
+
+float toDegrees(float rad) { return rad * 180.0f / PI; }
+float toRadians(float deg) { return deg * PI / 180.0f; }
+
+void forward_kinematics(float current_thetas[3], float position[3]) {
+    float theta1 = current_thetas[0]; // Base
+    float theta2 = current_thetas[1]; // Shoulder
+    float theta3 = current_thetas[2]; // Elbow (relative to shoulder link)
+
+    // Calculate wrist position relative to shoulder joint in the vertical plane (ignoring base rotation)
+    float r_plane = a[1] * cos(theta2) + a[2] * cos(theta2 + theta3);
+    float z_plane = a[1] * sin(theta2) + a[2] * sin(theta2 + theta3);
+
+    // Apply base rotation to get X, Y in the base frame
+    position[0] = r_plane * cos(theta1); // X
+    position[1] = r_plane * sin(theta1); // Y
+    // Add base height offset for Z
+    position[2] = d[0] + z_plane; // Z
+
+    // Serial.printf("DEBUG: FK Angles B:%.1f S:%.1f E:%.1f -> Pos X:%.2f Y:%.2f Z:%.2f\n",
+                // toDegrees(theta1)+90, toDegrees(theta2), toDegrees(-theta3), // Convert back to typical user angles for debug
+                // position[0], position[1], position[2]);
+}
+
+// --- Action Sequences ---
+
+/*
+ * Moves arm to the pre-defined HOME position.
+ * Uses the RETREAT sequence (Sh/El -> Base) as it's typically a return move.
+ */
+void StartPosition() {
+  Serial.println("DEBUG: Moving to HOME position (using RETREAT sequence)...");
+  float home_thetas[3];
+  if(!inverse_kinematics((float*)startUp, home_thetas)) {
+    Serial.println("ERR: HOME position unreachable via IK!");
+    // Maybe add failsafe like disabling motors?
+    return;
+  }
+  // Update global angle state
+  thetas[0] = home_thetas[0]; thetas[1] = home_thetas[1]; thetas[2] = home_thetas[2];
+  set_servos_retreat(thetas); // Use RETREAT sequence
+  Serial.println("DEBUG: Reached HOME position.");
+}
+
+/*
+ * Moves arm to the pre-defined PICKUP/DROP-OFF position.
+ * Uses the APPROACH sequence (Base -> Sh/El).
+ */
+void moveToPickup() {
+  Serial.println("DEBUG: Moving to PICKUP location (using APPROACH sequence)...");
+  float pickup_thetas[3];
+  if(!inverse_kinematics((float*)Pick_up, pickup_thetas)) {
+    Serial.println("ERR: PICKUP location unreachable via IK!");
+    return;
+  }
+  // Update global angle state
+  thetas[0] = pickup_thetas[0]; thetas[1] = pickup_thetas[1]; thetas[2] = pickup_thetas[2];
+  set_servos_approach(thetas); // Use APPROACH sequence
+  Serial.println("DEBUG: Reached PICKUP location.");
+}
+
+void openClamp() {
+  Serial.println("DEBUG: Opening clamp...");
+  if(!clampState){ // Only move if currently closed
+    smoothMoveServo(CLAMP_CHANNEL, CLAMP_SERVO_LIMITS[0], 0); // Move to 0 degrees (or min limit)
+    clampState = true;
+    // clampAngle updated inside smoothMoveServo
+    Serial.println("DEBUG: Clamp opened.");
+  } else {
+    Serial.println("DEBUG: Clamp already open.");
+  }
+}
+
+void moveToDropDown(){
+ 
+  Serial.println("DEBUG: Moving to PICKUP location (using APPROACH sequence)...");
+  float order_thetas[3];
+  if(!inverse_kinematics((float*)order, order_thetas)) {
+    Serial.println("ERR: PICKUP location unreachable via IK!");
+    return;
+  }
+  // Update global angle state
+  thetas[0] = order_thetas[0]; thetas[1] = order_thetas[1]; thetas[2] = order_thetas[2];
+  set_servos_approach(thetas); // Use APPROACH sequence
+  Serial.println("DEBUG: Reached PICKUP location.");
+}
+
+
+void closeClamp() {
+    Serial.println("DEBUG: Closing clamp with switch check...");
+    if (clampState) { // Only move if currently open
+        int startAngle = clampAngle; // Start from current known angle
+        bool switchPressed = false;
+        int targetAngle = startAngle; // Initialize targetAngle
+
+        // Incrementally close, checking switch
+        for (int angle = startAngle ; angle <= MAX_CLAMP_ANGLE; angle += 1) {
+            targetAngle = angle; // Update potential final angle
+            setServoAngle(CLAMP_CHANNEL, angle); // Use direct set for faster check loop
+            delay(250); // Allow servo to move slightly and switch to react
+
+            int switchValue = analogRead(34);
+            int switchState= digitalRead(clampSwitch);
+            Serial.print("DEBUG: Clamp Angle: "); Serial.print(angle); Serial.print(" Switch: "); Serial.println(switchValue);
+            Serial.print("DEBUG: Clamp Angle: "); Serial.print(angle); Serial.print(" Switch: "); Serial.println(switchState);
+            if (switchValue>=4090) { 
+                Serial.println("DEBUG: Clamp closed - Switch Activated.");
+                switchPressed = true;
+                break; // Stop closing
+            }
+             if (angle == 55) {
+                clampState = false; // Reached minimum angle, assume closed
+                Serial.println("DEBUG: Clamp closed (reached min angle).");
+                return;
+            }
+        }
+
+        // If switch never pressed, clampAngle becomes MAX_CLAMP_ANGLE
+        if (!switchPressed) {
+             Serial.printf("DEBUG: Clamp closed - Max Angle (%d) reached without switch press.\n", MAX_CLAMP_ANGLE);
+        }
+
+        clampAngle = targetAngle; // Store the angle where it stopped or max angle
+        clampState = false; // Mark clamp as closed
+        currentPWM[CLAMP_CHANNEL] = map(clampAngle, 0, 180, SERVO_MIN, SERVO_MAX); // Update PWM state
+        delay(200); // Short delay after closing
+    } else {
+        Serial.println("DEBUG: Clamp already closed.");
+    }
+}
+
+
+/*
+ * Pick an object from a specified shelf location.
+ */
+bool pickFromShelf(int row, int col) {
+  Serial.printf("DEBUG: Starting PICK sequence: Row=%d, Col=%d\n", row, col);
+
+  if (row < 0 || row >= 3 || col < 0 || col >= 3) { // Use >= 3 for 0-based index
+    Serial.println("ERR: Invalid shelf position for PICK.");
+    return false;
+  }
+
+  float* target = shelf[row][col]; // Target grasp position
+  float intermediate[3];          // Point slightly in front/above
+  float liftPosition[3];          // Point directly above target
+  float intermediate2[3]={0,25,20};
+  float target_thetas[3];
+  float intermediate_thetas[3];
+   float intermediate_thetas2[3];
+  float lift_thetas[3];
+  float home_thetas[3];
+  float homePosition[3] = {10, 0, 20};     // Home (startUp) position
+
+  // Define intermediate position (e.g., 4cm in front AND 2cm above target Z)
+  intermediate[0] = target[0] - 4.0f; // Adjust X based on arm configuration (pull back)
+  intermediate[1] = target[1];        // Same Y
+  intermediate[2] = target[2] + 2.0f; // Slightly above target Z
+  Serial.printf("DEBUG: Intermediate Point: (%.2f, %.2f, %.2f)\n", intermediate[0], intermediate[1], intermediate[2]);
+
+  // Define lift position (e.g., 4cm directly above target)
+  liftPosition[0] = target[0]-3;
+  liftPosition[1] = target[1];
+  liftPosition[2] = target[2]+5 ; // Lift 5 cm vertically
+  Serial.printf("DEBUG: Lift Point: (%.2f, %.2f, %.2f)\n", liftPosition[0], liftPosition[1], liftPosition[2]);
+
+
+  // --- Pick Sequence ---
+
+  // 0. (Optional but Recommended) Go Home First
+  StartPosition(); // Uses RETREAT
+  delay(ACTION_DELAY_MS);
+
+  // 1. Ensure Clamp is Open
+  Serial.println("DEBUG: Ensuring clamp is open...");
+  openClamp();
+  delay(ACTION_DELAY_MS); // Wait for clamp
+
+  // 2. Move to Intermediate Position (Approaching the area)
+  Serial.println("DEBUG: Moving to intermediate position...");
+  if (!inverse_kinematics(intermediate, intermediate_thetas)) {
+    Serial.println("ERR: Unreachable intermediate position.");
+    StartPosition(); // Go home on error (RETREAT)
+    return false;
+  }
+  set_servos_approach(intermediate_thetas); // APPROACH sequence
+  delay(ACTION_DELAY_MS);
+
+  // 3. Move from Intermediate down/forward to Target Grasp Position (Final Approach)
+  Serial.println("DEBUG: Moving to target grasp position...");
+  if (!inverse_kinematics(target, target_thetas)) {
+    Serial.println("ERR: Unreachable target grasp position.");
+    // Try to return to intermediate before going home
+    set_servos_retreat(intermediate_thetas); // RETREAT sequence
+    delay(ACTION_DELAY_MS);
+    StartPosition(); // RETREAT sequence
+    return false;
+  }
+  set_servos_approach(target_thetas); // APPROACH sequence
+  delay(ACTION_DELAY_MS);
+
+  // 4. Close Clamp
+  Serial.println("DEBUG: Closing clamp...");
+  closeClamp();
+  delay(ACTION_DELAY_MS / 2); // Wait for clamp to secure
+
+  // 5. Check if clamp actually closed (check clampState)
+  if (clampState) { // If clampState is still true (open), grasp failed
+      Serial.println("ERR: Failed to close clamp (Switch not pressed?). Aborting PICK.");
+      // Try to move back to intermediate before opening and going home
+      set_servos_retreat(intermediate_thetas); // RETREAT sequence
+      delay(ACTION_DELAY_MS);
+      openClamp(); // Ensure clamp is open before returning
+      delay(ACTION_DELAY_MS / 2);
+      StartPosition(); // RETREAT sequence
+      return false;
+  }
+  Serial.println("DEBUG: Clamp closed, object presumed grasped.");
+
+  // 6. Lift the object (Retreating upwards)
+  Serial.println("DEBUG: Lifting object UP...");
+  if (!inverse_kinematics(liftPosition, lift_thetas)) {
+    Serial.println("ERR: Unreachable lift position. Attempting to place back.");
+    // Try to place back down, open clamp, retreat
+    set_servos_approach(target_thetas); // APPROACH back down
+    delay(ACTION_DELAY_MS);
+    openClamp();
+    delay(ACTION_DELAY_MS / 2);
+    set_servos_retreat(intermediate_thetas); // RETREAT sequence
+    delay(ACTION_DELAY_MS);
+    StartPosition(); // RETREAT sequence
+    return false;
+  }
+  set_servos_retreat(lift_thetas); // RETREAT sequence (moving away)
+  delay(ACTION_DELAY_MS);
+   
+     // 2. Move to Intermediate Position (Approaching the area)
+  Serial.println("DEBUG: Moving to intermediate position...");
+  if (!inverse_kinematics(intermediate, intermediate_thetas)) {
+    Serial.println("ERR: Unreachable intermediate position.");
+    StartPosition(); // Go home on error (RETREAT)
+    return false;
+  }
+  set_servos_retreat(intermediate_thetas); // APPROACH sequence
+  delay(ACTION_DELAY_MS);
+  // // 7. Move back to Intermediate Position (Retreating further)
+  Serial.println("DEBUG: Moving back to home position...");
+  StartPosition(); // Uses RETREAT
+  delay(2000);
+  
+
+  // 8. Move to Drop-off position (Pickup Zone)
+  Serial.println("DEBUG: Moving to Drop-off position (Pickup Zone)...");
+  moveToDropDown(); // Uses APPROACH sequence
+  delay(ACTION_DELAY_MS);
+
+  // 9. Open Clamp to release object
+  Serial.println("DEBUG: Releasing object...");
+  openClamp();
+  delay(ACTION_DELAY_MS); // Wait for clamp
+ 
+
+     
+  Serial.println("DEBUG: Moving to intermediate position...");
+  if (!inverse_kinematics(intermediate2, intermediate_thetas2)) {
+    Serial.println("ERR: Unreachable intermediate position.");
+    StartPosition(); // Go home on error (RETREAT)
+    return false;
+  }
+  set_servos_retreat(intermediate_thetas2); // APPROACH sequence
+  delay(ACTION_DELAY_MS);
+  // 10. Return Home
+  Serial.println("DEBUG: Returning to HOME position after drop-off...");
+  StartPosition(); // Uses RETREAT sequence
+  delay(ACTION_DELAY_MS);
+
+
+  Serial.println("DEBUG: pickFromShelf completed successfully.");
+  sendMQTTMessageorder();
+  
+  return true;
+}
+
+
+/*
+ * Place an object (assumed to be held) at a specified shelf location.
+ */
+bool placeAtShelf(int row, int col) {
+  Serial.printf("DEBUG: Starting PLACE sequence: Row=%d, Col=%d\n", row, col);
+
+  if (row < 0 || row >= 3 || col < 0 || col >= 3) {
+    Serial.println("ERR: Invalid shelf position for PLACE.");
+    return false;
+  }
+
+  float* target = shelf[row][col]; // Final placement position
+  float intermediate[3];          // Point slightly in front/above target
+  float aboveTarget[3];           // Point directly above target (for final approach/retreat)
+  float pickup[3]={0,-25, 20}; 
+  float target_thetas[3];
+  float intermediate_thetas[3];
+  float above_target_thetas[3];
+  float pickup_thetas[3];
+
+  // Define intermediate position (e.g., 4cm in front AND 2cm above target Z)
+  intermediate[0] = target[0] - 4.0f; // Adjust X based on arm configuration
+  intermediate[1] = target[1];
+  intermediate[2] = target[2] + 2.0f;
+  Serial.printf("DEBUG: Intermediate Point: (%.2f, %.2f, %.2f)\n", intermediate[0], intermediate[1], intermediate[2]);
+
+  // Define "above target" position (e.g., 3cm vertically above target)
+  aboveTarget[0] = target[0];
+  aboveTarget[1] = target[1];
+  aboveTarget[2] = target[2] + 2.0f;
+  Serial.printf("DEBUG: Above Target Point: (%.2f, %.2f, %.2f)\n", aboveTarget[0], aboveTarget[1], aboveTarget[2]);
+
+  // --- Place Sequence ---
+
+  // 0. Simulate picking up the object first
+  Serial.println("DEBUG: Moving to Pickup position to simulate getting item...");
+  moveToPickup(); // APPROACH sequence
+  delay(ACTION_DELAY_MS);
+  Serial.println("DEBUG: Closing clamp to simulate securing item...");
+  closeClamp(); // Assume it grabs something
+  delay(ACTION_DELAY_MS / 2);
+  if (clampState) { // Check if clamp failed to close
+      Serial.println("ERR: Failed to simulate closing clamp at Pickup. Aborting PLACE.");
+      StartPosition(); // RETREAT sequence
+      return false;
+  }
+ // 2. Move to "Above Target" Position (Fine approach vertically)
+  Serial.println("DEBUG: Moving to position above shelf target...");
+   if (inverse_kinematics(pickup, pickup_thetas)) {
+     
+     // Try to move back to intermediate before going home
+     set_servos_retreat(pickup_thetas); // RETREAT sequence
+     delay(2*ACTION_DELAY_MS);
+     
+   }
+  
+  
+  
+
+StartPosition(); // RETREAT sequence
+delay(1000);
+  // 1. Move to Intermediate Position (Approaching the shelf area)
+  Serial.println("DEBUG: Moving to intermediate position near shelf...");
+  if (!inverse_kinematics(intermediate, intermediate_thetas)) {
+    Serial.println("ERR: Unreachable intermediate position.");
+    openClamp(); // Release simulated item before going home
+    delay(ACTION_DELAY_MS/2);
+    StartPosition(); // RETREAT sequence
+    return false;
+  }
+  set_servos_approach(intermediate_thetas); // APPROACH sequence
+  delay(ACTION_DELAY_MS);
+
+  // 2. Move to "Above Target" Position (Fine approach vertically)
+  Serial.println("DEBUG: Moving to position above shelf target...");
+   if (!inverse_kinematics(aboveTarget, above_target_thetas)) {
+     Serial.println("ERR: Unreachable position above target.");
+     // Try to move back to intermediate before going home
+     set_servos_retreat(intermediate_thetas); // RETREAT sequence
+     delay(ACTION_DELAY_MS);
+     openClamp(); // Release item
+     delay(ACTION_DELAY_MS/2);
+     StartPosition(); // RETREAT sequence
+     return false;
+   }
+   set_servos_approach(above_target_thetas); // APPROACH sequence
+   delay(ACTION_DELAY_MS);
+
+  // 3. Move Down to Final Target Position (Final placement approach)
+  Serial.println("DEBUG: Moving down to target shelf position...");
+  if (!inverse_kinematics(target, target_thetas)) {
+    Serial.println("ERR: Unreachable target shelf position.");
+    // Try to move back up slightly before retreating
+     set_servos_retreat(above_target_thetas); // RETREAT sequence back up
+     delay(ACTION_DELAY_MS);
+     set_servos_retreat(intermediate_thetas); // RETREAT sequence to intermediate
+     delay(ACTION_DELAY_MS);
+     openClamp(); // Release item
+     delay(ACTION_DELAY_MS/2);
+     StartPosition(); // RETREAT sequence
+    return false;
+  }
+  set_servos_approach(target_thetas); // APPROACH sequence
+  delay(ACTION_DELAY_MS);
+
+  // 4. Open Clamp to release the object
+  Serial.println("DEBUG: Opening clamp to release object...");
+  openClamp();
+  delay(ACTION_DELAY_MS); // Wait for clamp to open fully
+
+  // // 5. Move Back Up to "Above Target" Position (Retreat vertically)
+  // Serial.println("DEBUG: Moving back up above shelf target...");
+  // set_servos_retreat(above_target_thetas); // RETREAT sequence (using previous angles)
+  // delay(ACTION_DELAY_MS);
+
+  // 6. Move Back to Intermediate Position (Retreating further)
+  Serial.println("DEBUG: Moving back to intermediate position...");
+  set_servos_retreat(intermediate_thetas); // RETREAT sequence
+  delay(ACTION_DELAY_MS);
+
+  // 7. Return to HOME position
+  Serial.println("DEBUG: Returning to HOME position...");
+  StartPosition(); // Uses RETREAT sequence
+  delay(ACTION_DELAY_MS);
+
+  Serial.println("DEBUG: placeAtShelf completed successfully.");
+  sendMQTTMessage();
+  return true;
+}

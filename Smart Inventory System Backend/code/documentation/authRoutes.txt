@@ -1,0 +1,220 @@
+AUTHENTICATION API v1.2
+=======================
+
+BASE URL: /api/auth
+API Version: 1.2
+Last Updated: 2023-11-15
+
+PERFORMANCE METRICS:
+- Average Response Time: 120-300ms
+- Throughput: 800-1200 requests/second
+- JWT Token Expiry: 1 hour (access), 7 days (refresh)
+- Rate Limits: 100 requests/min per endpoint
+
+REQUIRED HEADERS:
+- Content-Type: application/json
+- Accept: application/json
+
+1. TOKEN DETAILS
+----------------
+- Algorithm: HS256
+- Secret: Rotates every 24h
+- Claims: userId, role, iat, exp
+- Refresh: Via /renew-token
+
+2. PASSWORD REQUIREMENTS
+------------------------
+- Minimum 12 characters
+- At least 1 uppercase, 1 lowercase, 1 number, 1 special char
+- Not similar to username
+- Not in common passwords list
+
+
+1. POST /login
+--------------
+Authenticates a user with username and password.
+
+Request Body:
+{
+  "username": "string (required, min 4 chars)",
+  "password": "string (required, see requirements above)"  
+}
+
+Success Response (200):
+{
+  "status": "success",
+  "user": {
+    "id": "string",
+    "username": "string",
+    "role": "customer|employee|admin",
+    "email": "string"
+  },
+  "token": "JWT token",
+  "refreshToken": "JWT token"
+}
+
+Error Responses:
+400 Bad Request:
+{
+  "error": "VALIDATION_ERROR",
+  "message": "Missing username/password",
+  "details": ["username is required"]
+}
+
+401 Unauthorized:
+{
+  "error": "AUTH_FAILED",
+  "message": "Invalid credentials",
+  "remainingAttempts": 4
+}
+
+429 Too Many Requests:
+{
+  "error": "RATE_LIMIT",
+  "message": "Too many login attempts",
+  "retryAfter": "5 minutes"  
+}
+
+500 Server Error:
+{
+  "error": "SERVER_ERROR",
+  "message": "Authentication service unavailable",
+  "requestId": "uuid"
+}
+
+2. POST /signup
+---------------
+Creates a new customer account.
+
+Request Body:
+{
+  "Username": "string (required)",
+  "Password": "string (required)",
+  "FirstName": "string (required)",
+  "LastName": "string (required)", 
+  "Email": "string (required)",
+  "Phone": "string (required)"
+}
+
+Success Response (201):
+{
+  "success": true,
+  "message": "Verification email sent"
+}
+
+Error Responses:
+- 400: Missing fields or email exists
+- 500: Server error
+
+3. POST /GoogleSignup
+--------------------
+Registers user via Google OAuth.
+
+Request Body:
+{
+  "credential": "Google OAuth token (required)"
+}
+
+Success Response (201):
+{
+  "success": true,
+  "message": "Customer registered successfully with Google"
+}
+
+Error Responses:
+- 400: Invalid token
+- 500: Server error
+
+4. GET /verify
+--------------
+Verifies email using token from verification email.
+
+Query Parameters:
+?token=verification_token
+
+Success Response (200):
+HTML page showing verification success
+
+Error Responses:
+- 400: Invalid token
+- 500: Verification failed
+
+5. POST /ResetPassword
+---------------------
+Initiates password reset process.
+
+Request Body:
+{
+  "username": "string (required)"
+}
+
+Success Response (200):
+{
+  "success": true,
+  "message": "Password reset email sent"
+}
+
+Error Responses:
+- 400: Missing username
+- 404: User not found
+- 500: Server error
+
+6. POST /Reset-Password
+----------------------
+Completes password reset.
+
+Request Body:
+{
+  "newPassword": "string (required)",
+  "token": "reset_token (required)"
+}
+
+Success Response (200):
+{
+  "success": true,
+  "message": "Password updated successfully"
+}
+
+Error Responses:
+- 400: Invalid token or password
+- 500: Server error
+
+7. POST /renew-token
+-------------------
+Renews expired JWT token.
+
+Request Body:
+{
+  "oldToken": "expired_token (required)"
+}
+
+Success Response (200):
+{
+  "success": true,
+  "token": "new_JWT_token"
+}
+
+Error Responses:
+- 400: Missing token
+- 401: Invalid token
+- 500: Server error
+
+8. POST /renew-employee-token
+----------------------------
+Renews expired employee JWT token.
+
+Request Body:
+{
+  "oldToken": "expired_token (required)"
+}
+
+Success Response (200):
+{
+  "success": true,
+  "token": "new_JWT_token"
+}
+
+Error Responses:
+- 400: Missing token
+- 401: Invalid token
+- 500: Server error

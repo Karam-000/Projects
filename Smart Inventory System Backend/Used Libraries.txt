@@ -1,0 +1,74 @@
+Used Libraries
+
+1. bcryptjs
+   - Install: `npm install bcryptjs`
+   - Used for hashing passwords securely.
+
+2. node-cron
+   - Install: `npm install node-cron`
+   - Used for scheduling jobs (like cron tasks) in Node.js.
+
+3. jsonwebtoken
+   - Install: `npm install jsonwebtoken`
+   - Used for generating and verifying JSON Web Tokens (JWT) for authentication.
+
+4. http
+   - Install: This is a built-in Node.js module, no installation needed.
+   - Used for creating HTTP server and handling requests/responses.
+
+5. validator
+   - Install: `npm install validator`
+   - Used for string validation (e.g., email, URL validation).
+
+6. db (custom module with `sql` and `poolPromise`)
+   - Install: This is a custom module, no installation needed.
+   - Used for database querying and connection pooling.
+
+7. sendEmail (custom module)
+   - Install: This is a custom module, no installation needed.
+   - Used for sending emails (probably wrapped around a mailing service like Nodemailer).
+
+8. crypto
+   - Install: This is a built-in Node.js module, no installation needed.
+   - Used for cryptographic operations (e.g., hashing, encryption).
+
+9. PDFKit
+   - Install: `npm install pdfkit`
+   - Used for generating PDF documents in Node.js.
+
+10. fs (File System)
+    - Install: This is a built-in Node.js module, no installation needed.
+    - Used for working with the file system (e.g., reading/writing files).
+
+11. path
+    - Install: This is a built-in Node.js module, no installation needed.
+    - Used for handling and transforming file paths.
+
+12. nodemailer
+    - Install: `npm install nodemailer`
+    - Used for sending emails via SMTP or other email services.
+
+13. axios
+    - Install: `npm install axios`
+    - Used for making HTTP requests, often for API calls.
+
+14. express
+    - Install: `npm install express`
+    - Used for building web applications and APIs.
+
+15. body-parser
+    - Install: `npm install body-parser`
+    - Used for parsing incoming request bodies in middleware.
+
+16. bwip-js
+    - Install: `npm install bwip-js`
+    - Used for generating barcodes in Node.js.
+17. Fuse.js
+    -Install: npm install fuse.js
+    -Used for: A powerful fuzzy-search library for JavaScript, allowing you to perform fuzzy matching and searches in a dataset (arrays, objects) with customizable thresholds, key fields, and more. Ideal for implementing search functionality with misspellings or variations in terms.
+
+
+18. google-auth-library
+   -Install: npm install google-auth-library
+   -Used for: A client library for authenticating with Google's OAuth 2.0 and managing Google API access tokens. Ideal for integrating OAuth2 authentication in applications to interact securely with Google services (e.g., Gmail, Google Drive). The library helps you manage token requests, token refresh, and user authentication flows.
+
