@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Age & Gender AI Detector | Deep Learning Project</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
+    <style>
+        /* --- Paste ALL your existing CSS here --- */
+        :root {
+            --primary: #7f5af0;
+            --secondary: #2cb67d;
+            --background: #16161a;
+            --text: #fffffe;
+            --card-width: 300px;
+            --card-spacing: 40px;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { background: var(--background); color: var(--text); font-family: 'Poppins', sans-serif; line-height: 1.6; overflow-x: hidden; }
+        .hero { background: linear-gradient(45deg, #2a2a72, #009ffd); height: 70vh; display: flex; align-items: center; justify-content: center; clip-path: polygon(0 0, 100% 0, 100% 90%, 0 100%); text-align: center; padding: 2rem; }
+        .hero-content { /* Added container for better structure */ display: flex; flex-direction: column; align-items: center; }
+        .glowing-title { font-size: 3.5rem; background: linear-gradient(45deg, #fff, var(--secondary)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; text-shadow: 0 0 20px rgba(44, 182, 125, 0.4); margin-bottom: 1rem; }
+        .credits { /* Style for credits */ font-size: 0.9em; opacity: 0.8; margin-top: 1rem; }
+
+        .slider-container { position: relative; width: 100%; max-width: 1200px; height: 500px; margin: 40px auto; perspective: 1000px; overflow: hidden; }
+        .card3d { position: absolute; top: 50%; left: 50%; width: var(--card-width); transform: translate(-50%, -50%); transition: all 0.5s ease; opacity: 0; background: rgba(255, 255, 255, 0.08); backdrop-filter: blur(20px); border-radius: 30px; padding: 2rem; box-shadow: 0 25px 50px rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.2); min-height: 400px; transform-style: preserve-3d; }
+        .card3d.active { opacity: 1; transform: translate(-50%, -50%) scale(1) rotateY(0deg); z-index: 5; }
+        .card3d.prev { opacity: 1; transform: translate(calc(-50% - var(--card-width) - var(--card-spacing)), -50%) scale(0.85) rotateY(30deg); z-index: 4; }
+        .card3d.next { opacity: 1; transform: translate(calc(-50% + var(--card-width) + var(--card-spacing)), -50%) scale(0.85) rotateY(-30deg); z-index: 4; }
+        .card3d.prev-second { opacity: 0.6; transform: translate(calc(-50% - (var(--card-width) + var(--card-spacing)) * 2), -50%) scale(0.7) rotateY(45deg); z-index: 3; }
+        .card3d.next-second { opacity: 0.6; transform: translate(calc(-50% + (var(--card-width) + var(--card-spacing)) * 2), -50%) scale(0.7) rotateY(-45deg); z-index: 3; }
+        .card-header { font-size: 1.5rem; margin-bottom: 1.5rem; color: var(--secondary); display: flex; align-items: center; gap: 1rem; }
+        .card-details ul { list-style: none; padding-left: 1rem; } /* Basic list styling */
+        .card-details li { margin-bottom: 0.5rem; position: relative; padding-left: 1.2rem; }
+        .card-details li::before { content: '•'; color: var(--primary); position: absolute; left: 0; font-size: 1.2em; line-height: 1; } /* Custom bullet point */
+        .data-features { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; } /* Responsive grid */
+        .data-feature { background: rgba(255,255,255,0.05); padding: 1rem; border-radius: 15px; text-align: center; }
+        .feature-value { font-size: 1.5rem; color: var(--primary); font-weight: bold; }
+        .feature-label { font-size: 0.8rem; opacity: 0.8; }
+        .carousel-nav { position: absolute; top: 50%; width: 100%; display: flex; justify-content: space-between; z-index: 10; padding: 0 10px; /* Add padding */ pointer-events: none; /* Allow clicks through */ }
+        .nav-btn { background: rgba(255,255,255,0.2); border: none; color: white; width: 40px; height: 40px; border-radius: 50%; cursor: pointer; font-size: 1.2rem; display: flex; align-items: center; justify-content: center; transition: all 0.3s ease; pointer-events: auto; /* Enable pointer events */ }
+        .nav-btn:hover { background: var(--primary); transform: scale(1.1); }
+
+        /* Demo Box Styles */
+        .demo-container { max-width: 900px; /* Wider container */ margin: 100px auto; padding: 0 20px; }
+        .demo-card { position: relative; margin: 0 auto; transform: none !important; opacity: 1 !important; background: rgba(255, 255, 255, 0.1); backdrop-filter: blur(15px); border: 1px solid rgba(255, 255, 255, 0.2); padding: 2rem; border-radius: 20px; display: flex; flex-direction: column; align-items: center; text-align: center; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3); transition: transform 0.3s ease, box-shadow 0.3s ease; margin-bottom: 40px; /* Add margin between cards */ }
+        .demo-card:hover { transform: scale(1.02); box-shadow: 0 15px 40px rgba(0, 0, 0, 0.4); }
+        .input-section { display: flex; flex-direction: column; gap: 1.5rem; width: 100%; max-width: 450px; /* Slightly wider input section */ }
+        .cyber-button { background: linear-gradient(45deg, var(--primary), var(--secondary)); color: var(--text); border: none; padding: 0.8rem 1.5rem; border-radius: 12px; font-size: 1rem; font-weight: bold; cursor: pointer; transition: all 0.3s ease; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2); display: inline-flex; /* Align icon and text */ align-items: center; gap: 0.5rem; justify-content: center; }
+        .cyber-button i { line-height: 1; } /* Align icon better */
+        .cyber-button:hover { transform: translateY(-2px) scale(1.03); box-shadow: 0 6px 15px rgba(0, 0, 0, 0.3); }
+        .cyber-button:disabled { background: grey; cursor: not-allowed; transform: none; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2); }
+        .upload-box { display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(255, 255, 255, 0.05); border: 2px dashed var(--secondary); padding: 2rem; border-radius: 15px; cursor: pointer; transition: all 0.3s ease; }
+        .upload-box:hover { background: rgba(255, 255, 255, 0.1); border-style: solid; }
+        #preview-container { width: 100%; max-width: 300px; height: 200px; border-radius: 15px; overflow: hidden; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255, 255, 255, 0.2); margin: 1rem auto; /* Center preview */ }
+        #preview-image { max-width: 100%; max-height: 100%; object-fit: cover; }
+        #result-box { background: rgba(0, 0, 0, 0.3); padding: 1rem 1.5rem; border-radius: 12px; font-size: 1rem; margin-top: 1rem; width: 100%; max-width: 450px; /* Match input section */ }
+        #result-box h3 { color: var(--primary); margin-bottom: 0.5rem; }
+        #result-box p { margin-bottom: 0.3rem; }
+        #result-box strong { color: var(--secondary); }
+        #result-box small { display: block; opacity: 0.7; font-size: 0.8em; margin-top: 1rem; }
+        .fun-message { font-style: italic; color: var(--primary); opacity: 0.9; margin-top: 0.5rem !important; }
+        /* Camera Specific */
+        #camera-preview { width: 100%; max-width: 300px; border-radius: 10px; margin-bottom: 1rem; border: 1px solid var(--secondary); }
+        #camera-section { margin-top: 1rem; }
+
+        /* Video Streaming Section Styles */
+        #video-stream-section { margin-top: 2rem; border-top: 1px solid rgba(255,255,255,0.2); padding-top: 2rem; width: 100%; }
+        #stream-controls { margin-bottom: 1.5rem; display: flex; gap: 1rem; justify-content: center; }
+        .stream-display { display: flex; justify-content: space-around; flex-wrap: wrap; gap: 20px; width: 100%; }
+        .stream-display > div { display: flex; flex-direction: column; align-items: center; } /* Center titles */
+        .stream-display h4 { margin-bottom: 0.5rem; font-size: 0.9em; opacity: 0.8; }
+        #videoFeed, #outputCanvas { border: 1px solid var(--secondary); border-radius: 10px; background: #000; display: block; /* Prevent extra space below */ }
+        #outputCanvas { border-color: var(--primary); background: #111; } /* Different border/bg for output */
+        #stream-status { margin-top: 1.5rem; font-size: 0.9em; text-align: center; min-height: 1.2em; /* Prevent layout shift */ color: var(--secondary); }
+        #stream-status.error { color: #f05a5a; } /* Error color */
+
+        /* Responsive adjustments */
+        @media (max-width: 768px) {
+            .glowing-title { font-size: 2.5rem; }
+            .hero { height: 50vh; clip-path: polygon(0 0, 100% 0, 100% 85%, 0 100%); }
+            .slider-container { height: 450px; }
+            .card3d { width: calc(var(--card-width) * 0.9); padding: 1.5rem; }
+             /* Stack stream displays vertically on smaller screens */
+            .stream-display { flex-direction: column; align-items: center; }
+            #videoFeed, #outputCanvas { width: 100%; max-width: 320px; height: auto; } /* Adjust video/canvas size */
+        }
+         @media (max-width: 480px) {
+             .glowing-title { font-size: 2rem; }
+             .hero { height: 40vh; }
+             .demo-card { padding: 1.5rem; }
+             .cyber-button { font-size: 0.9rem; padding: 0.7rem 1.2rem; }
+             .input-section { max-width: 100%; }
+             #preview-container { max-width: 100%; height: 180px; }
+         }
+
+    </style>
+</head>
+<body>
+    <header class="hero">
+        <div class="hero-content">
+            <h1 class="glowing-title">AI Age & Gender Detector</h1>
+            <div class="credits">
+                <p>Presented to: </p>
+                <p>Prepared by: </p>
+            </div>
+        </div>
+    </header>
+
+    <div class="slider-container" id="sliderContainer">
+        <div class="card3d">
+            <div class="card-header"><i class="fas fa-bullseye"></i><h2>Project Objective</h2></div>
+            <div class="card-details"><p>Develop a multi-task deep learning model that can:</p><ul><li>Accurately predict age (regression)</li><li>Classify gender (binary classification)</li><li>Handle real-world facial variations</li><li>Achieve state-of-the-art performance</li></ul>
+            <div class="data-features"><div class="data-feature"><div class="feature-value">91.54%</div><div class="feature-label">Gender Accuracy</div></div><div class="data-feature"><div class="feature-value">5.54</div><div class="feature-label">Age MAE</div></div></div></div>
+        </div>
+        <div class="card3d">
+             <div class="card-header"><i class="fas fa-database"></i><h2>Dataset</h2></div>
+             <div class="data-features"><div class="data-feature"><div class="feature-value">23,708</div><div class="feature-label">Total Images</div></div><div class="data-feature"><div class="feature-value">16,595</div><div class="feature-label">Training Set</div></div><div class="data-feature"><div class="feature-value">3,556</div><div class="feature-label">Validation Set</div></div><div class="data-feature"><div class="feature-value">3,557</div><div class="feature-label">Test Set</div></div></div>
+             <div class="card-details"><p>UTKFace dataset with:</p><ul><li>Ages 1-116 years</li><li>Balanced gender distribution</li><li>160x160 resolution</li></ul></div>
+        </div>
+        <div class="card3d">
+            <div class="card-header"><i class="fas fa-network-wired"></i><h2>Model Architecture</h2></div>
+            <div class="card-details"><h3>Base Network:</h3><ul><li>4 Conv Blocks (32→64→128→256)</li><li>BatchNorm + ReLU</li><li>MaxPool2d + Dropout</li></ul><h3>Heads:</h3><ul><li>Age: Regression (512→128→1)</li><li>Gender: Classification (512→256→1)</li></ul></div>
+        </div>
+         <div class="card3d">
+             <div class="card-header"><i class="fas fa-chart-line"></i><h2>Training Results</h2></div>
+             <div class="data-features"><div class="data-feature"><div class="feature-value">40</div><div class="feature-label">Epochs</div></div><div class="data-feature"><div class="feature-value">5.54</div><div class="feature-label">Final MAE</div></div><div class="data-feature"><div class="feature-value">91.54%</div><div class="feature-label">Final Acc</div></div></div>
+             <div class="card-details"><p>Best Validation:</p><ul><li>Age MAE: 5.53</li><li>Gender Acc: 90.47%</li></ul></div>
+         </div>
+         <div class="card3d">
+            <div class="card-header"><i class="fas fa-trophy"></i><h2>Test Performance</h2></div>
+            <div class="data-features"><div class="data-feature"><div class="feature-value">5.54</div><div class="feature-label">Age MAE</div></div><div class="data-feature"><div class="feature-value">0.83</div><div class="feature-label">R² Score</div></div><div class="data-feature"><div class="feature-value">91.54%</div><div class="feature-label">Gender Acc</div></div></div>
+            <div class="card-details"><p>Gender Classification:</p><ul><li>Precision: 92.5% (F), 90.5% (M)</li><li>Recall: 90.8% (F), 92.3% (M)</li></ul></div>
+        </div>
+         <div class="card3d">
+            <div class="card-header"><i class="fas fa-cogs"></i><h2>Training Details</h2></div>
+            <div class="card-details"><h3>Optimization:</h3><ul><li>Adam Optimizer</li><li>Learning Rate: 0.001</li><li>Weight Initialization</li></ul><h3>Key Metrics:</h3><ul><li>Early convergence at epoch 14</li><li>Stable training after epoch 20</li><li>No overfitting observed</li></ul></div>
+         </div>
+        <div class="carousel-nav">
+            <button class="nav-btn" id="prevBtn"><i class="fas fa-chevron-left"></i></button>
+            <button class="nav-btn" id="nextBtn"><i class="fas fa-chevron-right"></i></button>
+        </div>
+    </div>
+
+    <div class="demo-container">
+
+        <div class="demo-card">
+            <div class="card-header">
+                <i class="fas fa-image"></i> <h2>Single Image Analysis</h2>
+            </div>
+            <div class="input-section">
+                <div id="camera-section" style="display: none;">
+                     <video id="camera-preview" autoplay playsinline></video> <button id="capture-btn" class="cyber-button">
+                        <i class="fas fa-camera"></i> Capture
+                    </button>
+                </div>
+
+                <button id="toggle-camera-btn" class="cyber-button">
+                    <i class="fas fa-video"></i> Turn On Camera (for Capture)
+                </button>
+
+                <input type="file" id="file-input" hidden accept="image/*">
+                <div class="upload-box" onclick="document.getElementById('file-input').click()">
+                    <i class="fas fa-upload fa-2x"></i>
+                    <p>Upload Face Image</p>
+                </div>
+
+                <div id="preview-container">
+                    <img id="preview-image" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=" alt="Preview">
+                </div>
+
+                <button class="cyber-button" onclick="predictSingleImage()" id="predict-btn"> <i class="fas fa-brain"></i> Analyze Uploaded/Captured Face
+                </button>
+
+                <div id="result-box"> <div id="results">Analysis results will appear here.</div> <small>Note: We don't store your images!</small>
+                </div>
+            </div>
+        </div> <div class="demo-card">
+             <div class="card-header">
+                 <i class="fas fa-broadcast-tower"></i>
+                <h2>Live Stream Analysis</h2>
+            </div>
+             <div id="video-stream-section"> <div id="stream-controls">
+                    <button id="startStreamBtn" class="cyber-button"><i class="fas fa-play"></i> Start Stream</button>
+                    <button id="stopStreamBtn" class="cyber-button" disabled><i class="fas fa-stop"></i> Stop Stream</button>
+                </div>
+                <div class="stream-display">
+                    <div>
+                        <h4>Your Webcam Feed</h4>
+                        <video id="videoFeed" width="320" height="240" autoplay playsinline muted></video>
+                    </div>
+                    <div>
+                        <h4>Processed Stream</h4>
+                        <canvas id="outputCanvas" width="320" height="240"></canvas>
+                    </div>
+                </div>
+                 <p id="stream-status"></p> </div> </div> </div> <script>
+        // --- Carousel Logic (Existing) ---
+        document.addEventListener("DOMContentLoaded", function () {
+            const cards = document.querySelectorAll(".card3d");
+            if (cards.length === 0) return; // Exit if no cards found
+            const totalCards = cards.length;
+            let currentIndex = 0;
+
+            function updateCarousel() {
+                cards.forEach((card, index) => {
+                    card.classList.remove('active', 'prev', 'next', 'prev-second', 'next-second', 'hide-beyond'); // Add hide class
+                    const offset = (index - currentIndex + totalCards) % totalCards;
+
+                    if (offset === 0) card.classList.add('active');
+                    else if (offset === 1) card.classList.add('next');
+                    else if (offset === 2) card.classList.add('next-second');
+                    else if (offset === totalCards - 1) card.classList.add('prev');
+                    else if (offset === totalCards - 2) card.classList.add('prev-second');
+                    else card.classList.add('hide-beyond'); // Hide cards further away
+                });
+            }
+
+            function nextCard() { currentIndex = (currentIndex + 1) % totalCards; updateCarousel(); }
+            function prevCard() { currentIndex = (currentIndex - 1 + totalCards) % totalCards; updateCarousel(); }
+
+            const nextButton = document.getElementById('nextBtn');
+            const prevButton = document.getElementById('prevBtn');
+            if (nextButton) nextButton.addEventListener('click', nextCard);
+            if (prevButton) prevButton.addEventListener('click', prevCard);
+
+            // Auto-rotate (optional)
+            let autoRotateInterval;
+            const sliderContainer = document.getElementById('sliderContainer');
+
+            function startAutoRotate() {
+                 clearInterval(autoRotateInterval); // Clear existing interval first
+                 autoRotateInterval = setInterval(nextCard, 4000); // Adjust interval time
+            }
+            function stopAutoRotate() {
+                 clearInterval(autoRotateInterval);
+            }
+
+            if (sliderContainer) {
+                sliderContainer.addEventListener('mouseenter', stopAutoRotate);
+                sliderContainer.addEventListener('mouseleave', startAutoRotate);
+                // Touch/drag support
+                let startX;
+                sliderContainer.addEventListener('touchstart', (e) => { startX = e.touches[0].clientX; stopAutoRotate(); });
+                sliderContainer.addEventListener('touchend', (e) => {
+                    const endX = e.changedTouches[0].clientX;
+                    if (startX - endX > 50) nextCard();
+                    else if (endX - startX > 50) prevCard();
+                    startAutoRotate(); // Restart auto-rotate after touch
+                });
+            }
+
+            // Initialize
+            updateCarousel();
+            startAutoRotate(); // Start rotating initially
+        });
+
+        // --- Image Upload / Capture Logic (Existing, slightly modified) ---
+        const cameraPreview = document.getElementById('camera-preview');
+        const captureBtn = document.getElementById('capture-btn');
+        const toggleCameraBtn = document.getElementById('toggle-camera-btn');
+        const cameraSection = document.getElementById('camera-section');
+        const fileInput = document.getElementById('file-input');
+        const previewImage = document.getElementById('preview-image');
+        const resultsDiv = document.getElementById('results');
+        let cameraStream = null; // Stream for image capture ONLY
+
+        const funnyMessages = [ /* Your funny messages array */
+            "Looking sharp! Our AI is impressed ✨",
+            "Age is just a number... that our AI tried to guess!",
+            "Wow, almost broke the algorithm!",
+            "Is that you or a celebrity? The AI is star-struck 🤩",
+            "Our model says: 'Need more coffee... or data!' ☕"
+        ];
+
+        async function startWebcamCapture() {
+            // Ensure video stream is off before starting capture webcam
+            if (videoStream) { stopVideoStream(); }
+            try {
+                cameraStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                cameraPreview.srcObject = cameraStream;
+                cameraSection.style.display = 'block';
+                toggleCameraBtn.innerHTML = '<i class="fas fa-video-slash"></i> Turn Off Capture Camera';
+                toggleCameraBtn.onclick = stopWebcamCapture; // Change action
+            } catch (error) {
+                console.error('Error accessing capture webcam:', error);
+                alert('Unable to access webcam. Please allow camera permissions.');
+            }
+        }
+
+        function stopWebcamCapture() {
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(track => track.stop());
+                cameraPreview.srcObject = null;
+                cameraSection.style.display = 'none';
+                toggleCameraBtn.innerHTML = '<i class="fas fa-video"></i> Turn On Camera (for Capture)';
+                toggleCameraBtn.onclick = startWebcamCapture; // Change action back
+                cameraStream = null;
+            }
+        }
+
+        // Initial setup for toggle button
+        if (toggleCameraBtn) {
+             toggleCameraBtn.onclick = startWebcamCapture;
+        }
+
+        // Capture Image from Webcam
+        if (captureBtn) {
+            captureBtn.addEventListener('click', () => {
+                if (!cameraStream) {
+                    alert("Please turn on the camera first!");
+                    return;
+                }
+                const canvas = document.createElement('canvas');
+                canvas.width = cameraPreview.videoWidth;
+                canvas.height = cameraPreview.videoHeight;
+                const context = canvas.getContext('2d');
+                context.drawImage(cameraPreview, 0, 0, canvas.width, canvas.height);
+                previewImage.src = canvas.toDataURL('image/png'); // Show captured image in preview
+                stopWebcamCapture(); // Turn off camera after capture
+            });
+        }
+
+        // Handle image preview from file upload
+         if (fileInput) {
+            fileInput.addEventListener('change', function(e) {
+                if (e.target.files && e.target.files[0]) {
+                    const reader = new FileReader();
+                    reader.onload = function(event) {
+                        previewImage.src = event.target.result;
+                    }
+                    reader.readAsDataURL(e.target.files[0]);
+                     // Ensure capture camera is off if user uploads
+                    if (cameraStream) { stopWebcamCapture(); }
+                }
+            });
+        }
+
+        // Prediction function for SINGLE IMAGE
+        async function predictSingleImage() {
+            let imageFile;
+            resultsDiv.innerHTML = "Analyzing..."; // Indicate processing
+
+            // Check if the preview image source is a captured/uploaded image (base64)
+            if (previewImage.src && previewImage.src.startsWith('data:image')) {
+                 // Convert base64 image back to Blob for sending
+                try {
+                    const response = await fetch(previewImage.src);
+                    imageFile = await response.blob();
+                } catch (error) {
+                     console.error("Error converting preview src to blob:", error);
+                     resultsDiv.innerHTML = `<span style="color: red;">Error preparing image for analysis.</span>`;
+                     return;
+                }
+
+            } else {
+                 // Fallback: maybe try file input again, though preview should reflect it
+                if (fileInput.files && fileInput.files[0]) {
+                     imageFile = fileInput.files[0];
+                } else {
+                    resultsDiv.innerHTML = `<span style="color: orange;">Please upload or capture an image first!</span>`;
+                    return; // No image available
+                }
+            }
+
+            if (!imageFile) {
+                 resultsDiv.innerHTML = `<span style="color: orange;">No image data found for analysis.</span>`;
+                 return;
+            }
+
+
+            const formData = new FormData();
+            // Append blob with a filename
+            formData.append('image', imageFile, 'image.png');
+
+            try {
+                const response = await fetch('/predict', { // Hits the original /predict endpoint
+                    method: 'POST',
+                    body: formData,
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({ error: 'Prediction request failed with status ' + response.status }));
+                    throw new Error(errorData.error || 'Prediction failed');
+                }
+                const data = await response.json();
+
+                if (data.error) { // Handle specific error from backend
+                     throw new Error(data.error);
+                }
+
+                // Display results
+                const randomMessage = funnyMessages[Math.floor(Math.random() * funnyMessages.length)];
+                resultsDiv.innerHTML = `
+                    <h3>Analysis Results:</h3>
+                    <p>Estimated Age: <strong>${data.age} years</strong></p>
+                    <p>Predicted Gender: <strong>${data.gender}</strong></p>
+                    <p class="fun-message">${randomMessage}</p>
+                `;
+            } catch (error) {
+                console.error('Error during single image prediction:', error);
+                resultsDiv.innerHTML = `<span style="color: red;">Error: ${error.message}. Please try again.</span>`;
+            }
+        }
+
+
+        // --- Video Streaming Logic ---
+        const videoFeed = document.getElementById('videoFeed');
+        const outputCanvas = document.getElementById('outputCanvas');
+        const outputCtx = outputCanvas ? outputCanvas.getContext('2d') : null; // Check if canvas exists
+        const startStreamBtn = document.getElementById('startStreamBtn');
+        const stopStreamBtn = document.getElementById('stopStreamBtn');
+        const streamStatus = document.getElementById('stream-status');
+
+        let videoSocket = null; // Socket for streaming ONLY
+        let videoStream = null; // MediaStream for streaming ONLY
+        let videoIntervalId = null; // Interval for streaming ONLY
+        const VIDEO_FPS = 10; // Target FPS for streaming
+
+        const streamTempCanvas = document.createElement('canvas'); // Offscreen canvas for streaming
+        const streamTempCtx = streamTempCanvas.getContext('2d');
+
+        function connectVideoSocket() {
+            if (videoSocket && videoSocket.connected) return; // Already connected
+
+            // Disconnect previous socket if any (safety check)
+             if (videoSocket) videoSocket.disconnect();
+
+            streamStatus.textContent = 'Connecting to analysis server...';
+            streamStatus.classList.remove('error');
+
+            videoSocket = io(window.location.origin); // Assumes Flask runs on same host/port
+
+            videoSocket.on('connect', () => {
+                console.log('Connected to server for video streaming:', videoSocket.id);
+                streamStatus.textContent = 'Streaming live analysis...';
+            });
+
+            videoSocket.on('disconnect', (reason) => {
+                console.log('Disconnected from video streaming server:', reason);
+                // Only update status if streaming was intended to be active
+                if (videoStream) {
+                     streamStatus.textContent = 'Server disconnected. Please restart stream.';
+                     streamStatus.classList.add('error');
+                     stopVideoStream(false); // Stop stream but don't disconnect socket again
+                } else {
+                     streamStatus.textContent = 'Stream stopped.';
+                }
+            });
+
+            videoSocket.on('processed_frame', (data) => {
+                if (!outputCtx) return; // Don't process if canvas context not ready
+                const image = new Image();
+                image.onload = () => {
+                    outputCtx.drawImage(image, 0, 0, outputCanvas.width, outputCanvas.height);
+                };
+                image.onerror = () => { console.error("Error loading processed frame image"); };
+                image.src = data;
+            });
+
+             videoSocket.on('processing_error', (data) => {
+                console.error('Backend Streaming Error:', data.error);
+                streamStatus.textContent = `Analysis Error: ${data.error}`;
+                streamStatus.classList.add('error');
+            });
+
+             videoSocket.on('connect_error', (err) => {
+                 console.error('Connection Error:', err.message);
+                 streamStatus.textContent = 'Cannot connect to analysis server.';
+                 streamStatus.classList.add('error');
+                 stopVideoStream(false); // Stop stream attempts
+            });
+        }
+
+        function startVideoStream() {
+             // Ensure capture webcam is off
+            if (cameraStream) stopWebcamCapture();
+
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                 alert("Webcam access (getUserMedia) is not supported on your browser!");
+                 return;
+            }
+
+            streamStatus.textContent = 'Requesting camera access...';
+            streamStatus.classList.remove('error');
+
+            // Request slightly smaller stream for performance
+            navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240, facingMode: 'user' } })
+                .then(mediaStream => {
+                    videoStream = mediaStream;
+                    videoFeed.srcObject = videoStream;
+                    videoFeed.onloadedmetadata = () => {
+                        // Match canvas sizes to the actual video stream dimensions
+                        streamTempCanvas.width = videoFeed.videoWidth;
+                        streamTempCanvas.height = videoFeed.videoHeight;
+                        outputCanvas.width = videoFeed.videoWidth;
+                        outputCanvas.height = videoFeed.videoHeight;
+
+                        connectVideoSocket(); // Connect WebSocket
+                        startStreamBtn.disabled = true;
+                        stopStreamBtn.disabled = false;
+                        // Start sending frames
+                        clearInterval(videoIntervalId); // Clear previous interval just in case
+                        videoIntervalId = setInterval(sendVideoStreamFrame, 1000 / VIDEO_FPS);
+                        console.log("Video stream started, sending frames...");
+                    };
+                     videoFeed.onerror = () => {
+                         streamStatus.textContent = 'Error playing video feed.';
+                         streamStatus.classList.add('error');
+                         stopVideoStream();
+                     };
+                })
+                .catch(err => {
+                    console.error("Error accessing webcam for streaming: ", err);
+                    streamStatus.textContent = 'Webcam access denied or error.';
+                    streamStatus.classList.add('error');
+                     if (err.name === "NotAllowedError") {
+                         alert("Webcam permission denied. Please allow camera access in your browser settings and refresh.");
+                     } else {
+                         alert("Could not access webcam for streaming. Error: " + err.message);
+                     }
+                });
+        }
+
+        // Added 'disconnectSocket' flag to prevent disconnecting twice on socket errors
+        function stopVideoStream(disconnectSocket = true) {
+            console.log("Stopping video stream...");
+            if (videoIntervalId) {
+                clearInterval(videoIntervalId);
+                videoIntervalId = null;
+            }
+            if (videoStream) {
+                videoStream.getTracks().forEach(track => track.stop());
+                videoFeed.srcObject = null;
+                videoStream = null;
+            }
+             if (outputCtx) { // Clear the output canvas
+                outputCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
+            }
+            if (disconnectSocket && videoSocket && videoSocket.connected) {
+                videoSocket.disconnect(); // Disconnect explicitly on user stop
+                videoSocket = null; // Clear reference
+            }
+
+            startStreamBtn.disabled = false;
+            stopStreamBtn.disabled = true;
+
+            // Only set status if user explicitly stopped or if it wasn't an error before
+             if (!streamStatus.classList.contains('error') || disconnectSocket) {
+                streamStatus.textContent = 'Stream stopped.';
+                streamStatus.classList.remove('error');
+            }
+            console.log("Video stream stopped.");
+        }
+
+        function sendVideoStreamFrame() {
+            // Check all conditions before sending
+            if (!videoSocket || !videoSocket.connected || !videoStream || videoFeed.paused || videoFeed.ended || !outputCtx) {
+                // Optional: Log why frame wasn't sent for debugging
+                // console.log("Skipping frame send:", {socket: !!videoSocket, connected: videoSocket?.connected, stream: !!videoStream, paused: videoFeed?.paused, ended: videoFeed?.ended});
+                return;
+            }
+            try {
+                // Draw video frame to the offscreen canvas
+                streamTempCtx.drawImage(videoFeed, 0, 0, streamTempCanvas.width, streamTempCanvas.height);
+                // Get base64 representation (JPEG is usually smaller)
+                const dataURL = streamTempCanvas.toDataURL('image/jpeg', 0.7); // Quality 0.7
+                // Send frame to backend
+                videoSocket.emit('image_frame', dataURL);
+            } catch (e) {
+                 console.error("Error capturing or sending video frame:", e);
+                 // Consider stopping stream if errors persist
+                 // stopVideoStream();
+            }
+        }
+
+        // Add event listeners for stream buttons
+        if (startStreamBtn) startStreamBtn.addEventListener('click', startVideoStream);
+        if (stopStreamBtn) stopStreamBtn.addEventListener('click', () => stopVideoStream(true)); // Pass true to force disconnect
+
+        // Ensure streams/cameras stop if user navigates away
+        window.addEventListener('beforeunload', () => {
+            stopWebcamCapture();
+            stopVideoStream(true);
+        });
+
+    </script>
+</body>
+</html>
