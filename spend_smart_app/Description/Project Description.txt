@@ -1,0 +1,73 @@
+App Name: SmartSpend Expense Tracker
+
+Version: 1.0.0
+
+Author: Gemini AI
+
+Date: August 16, 2025
+
+---
+
+ 1. Application Overview
+
+SmartSpend is a comprehensive and intuitive mobile application designed to help users manage their personal finances with ease and intelligence. Built with Flutter, this app provides a complete suite of tools for tracking expenses, setting budgets, visualizing spending habits, and gaining financial insights.
+
+The application is centered around a monthly financial cycle, where users can input their monthly salary and track all expenditures against it. At the end of each month, the app automatically archives the month's data, calculates savings, and resets for the new month, while preserving a historical record of all transactions.
+
+A key feature of SmartSpend is the integrated AI-powered financial chatbot, which can analyze a user's spending data to provide personalized summaries, identify trends, and offer practical advice for better financial management.
+
+---
+
+ 2. Core Features
+
+ Onboarding Experience: A user-friendly introduction screen guides new users through the app's main functionalities.
+
+ Dashboard & Financial Summary:
+     Displays a clear overview of monthly salary, total expenses for the current month, and remaining savings.
+     Shows the total cumulative savings accumulated over time.
+     A banner highlights the number of days left in the current month.
+
+ Expense Management:
+     Add, Edit, and Delete: Easily add new expenses with details such as title, amount, quantity, category, and date. Existing expenses can be edited or deleted.
+     Swipe-to-Delete: A convenient swipe-to-delete gesture on the expense list allows for quick removal, with an "Undo" option.
+     Recurring Expenses: Mark expenses like rent or subscriptions as "recurring" to ensure they are carried over during the monthly data reset.
+
+ Budgeting & Categories:
+     Custom Categories: Create and manage personalized spending categories, each with a unique name, emoji, and color for easy identification.
+     Set Budgets: Assign monthly budgets to each category.
+     Progress Tracking: Visual progress bars show how much of the budget has been spent for each category, with a warning color for overspending.
+
+ Data Visualization:
+     Salary Breakdown Pie Chart: A pie chart visually represents the proportion of the monthly salary that has been spent versus what has been saved.
+     Savings History Bar Chart: A bar chart tracks monthly savings over time, showing both positive savings and months with overspending.
+
+ Data & Personalization:
+     Currency Picker: Select your local currency for all financial data.
+     Monthly Auto-Archive: The app automatically detects a new month, archives the previous month's data, calculates the savings, and resets the dashboard. Non-recurring expenses from the past month are cleared.
+     Data Persistence: All financial data is securely stored locally on the device using `SharedPreferences`.
+
+ Reporting & History:
+     Expense History: A dedicated screen allows users to view a complete history of all past expenses, filterable by month and year.
+     Excel Export: Export a detailed financial report, including all expenses and summary data, to an `.xlsx` file for offline analysis or record-keeping.
+
+ AI Financial Assistant (Chatbot):
+     Conversational Interface: Engage with an AI chatbot to ask financial questions.
+     Spending Analysis: A powerful "Analyze my spending" feature sends the last 60 days of expense data to the AI, which returns a summary of spending habits, identifies trends, and provides actionable advice.
+     Secure & Private: The analysis is based on the data you have logged in the app.
+
+---
+
+ 3. Technical Stack
+
+ Framework: Flutter
+ Language: Dart
+ Key Libraries:
+     `http`: For making API calls to the AI chatbot service.
+     `shared_preferences`: For local data storage.
+     `fl_chart`: For creating interactive charts and graphs.
+     `excel`: For generating and exporting Excel files.
+     `introduction_screen`: For the initial onboarding flow.
+     `currency_picker`: For currency selection.
+     `intl`: For date formatting.
+     `path_provider`: For finding the local path to save exported files.
+     `flutter_colorpicker`: For selecting custom colors for categories.
