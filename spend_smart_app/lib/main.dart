@@ -1319,7 +1319,7 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
   // Placeholder for the API call to your backend/AI model.
   Future<String> _callApi(List<Map<String, String>> messages) async {
     const _huggingFaceApiUrl = "https://router.huggingface.co/v1/chat/completions";
-    const _huggingFaceApiKey = "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";
+    const _huggingFaceApiKey = "";
 
     if (_huggingFaceApiKey == "YOUR_HUGGING_FACE_API_KEY_HERE") {
       return "Please replace 'YOUR_HUGGING_FACE_API_KEY_HERE' with a valid API key to enable the chatbot.";
