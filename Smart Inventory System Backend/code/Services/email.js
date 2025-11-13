@@ -63,7 +63,7 @@ const sendEmail = async (subject, message, recipientEmail, sent_from) => {
 //========================================genrate tiken for reset email ===================================
 const generateToken = (userId, username) => {
   const tokenPayload = { userId, username };
-  const token = jwt.sign(tokenPayload, '1111', { expiresIn: '4h' });
+  const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '4h' });
   console.log(`JWT token created: ${token}`);
   return token;
 };

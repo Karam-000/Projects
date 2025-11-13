@@ -7,61 +7,15 @@ const {sendEmail} = require('../Services/email');
 
 //===========================================check Employee Token===================================
 async function checkValidEmployeeToken(token) {
- 
     try {
-      const pool = await poolPromise;
-      console.log('Connected to SQL database');
-      // Check if token exists in EmployeeLogin for the provided employeeId
-      const loginResult = await pool.request()
-        .input('token', sql.VarChar(255), token)
-        .query(`
-          SELECT * 
-           FROM EmployeeLogin 
-           WHERE Token = @token
-
-        `);
-         console.log('Query executed successfully');
-      if (loginResult.recordset.length === 0) {
-        console.log('Token not found in EmployeeLogin table');
-        return false; // Token not found for this employee
-      }
-  
-      try {
-
         // Decode JWT token
-        const decodedToken = jwt.verify(token, '1234'); // Your JWT secret key
-        console.log('Decoded token:', decodedToken);
-        const employeeId = decodedToken.employeeId; // Extract employeeId from the token
-        console.log('Employee ID:', employeeId);
-        
-  
+        const decodedToken = jwt.verify(token, process.env.EMPLOYEE_SECRET);
         return decodedToken; // Token is valid
-
-      } catch (err) {
-        if (err.name === 'TokenExpiredError') {
-          console.log('Token has expired. Cleaning up expired tokens.');
-          const decode= jwt.decode(token);
-          const employeeId = decode.EmployeeID; // Extract employeeId from the token
-          console.log('Employee ID:', employeeId);
-          // Delete all expired tokens for the employee
-          await pool.request()
-            .input('employeeId', sql.Int, employeeId)
-            .query(`
-              DELETE FROM EmployeeLogin 
-              WHERE EmployeeID = @employeeId AND LoginTime < GETDATE()
-            `); // Assuming you have an ExpiryDate column to track token expiry
-  
-          return false; // Return false since token is expired
-        }
-  
-        // For other JWT errors, rethrow the error
-        throw err;
-      }
     } catch (err) {
-      console.error('Error checking token validity:', err.message);
-      return false; // Return false in case of an error
+        console.error('Error checking token validity:', err.message);
+        return false; // Return false in case of an error (e.g., expired, invalid)
     }
-  }
+}
   async function test2() {
     const test= await checkValidEmployeeToken('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJEZXBhcnRtZW50TmFtZSI6IkhSIiwiZW1wbG95ZWVJZCI6MSwiZW1wbG95ZWVOYW1lIjoiIEthcmFtIEFib3UgU2FoeW91biIsImlhdCI6MTc0MzcwMjgyNiwiZXhwIjoxNzQzNzA2NDI2fQ.kiCgs6oUTpXUi0babs-cQmGlXER7KGo0vo5MlnKuOv8')
   console.log(test)
@@ -75,34 +29,14 @@ async function checkValidEmployeeToken(token) {
   async function checkTokenInSession(token) {
     try {
         // Verify the JWT token
-       const decodedToken= jwt.verify(token, '0000'); 
-        
-        
-        return decodedToken; 
-        
-  
+        const decodedToken = jwt.verify(token, process.env.JWT_SECRET);
+        return decodedToken;
     } catch (err) {
-        if (err.name === 'TokenExpiredError') {
-            // If the token is expired, delete it from the UserSessions table
-            try {
-                const pool = await poolPromise;
-                const request = new sql.Request(pool);
-                request.input('Token', sql.NVarChar, token);
-                await request.query(`
-                    DELETE FROM UserSessions
-                    WHERE Token = @Token;
-                `);
-            } catch (error) {
-                console.error('Error deleting expired token:', error.message);
-            }
-            return false; // The token is not valid because it is expired
-        } else {
-            // Handle other verification errors
-            console.error('Error verifying token:', err.message);
-            return false;
-        }
+        // Handle token verification errors (e.g., expired, invalid)
+        console.error('Error verifying token:', err.message);
+        return false;
     }
-  }
+}
   
   //============================================================================================
   // Function to check the token in the ResetPasswordTokens table
@@ -110,7 +44,7 @@ async function checkValidEmployeeToken(token) {
   const checkResetToken = async (token) => {
     try {
       // Verify the JWT token
-      const userName=jwt.verify(token, '1111'); // Replace 'your-secret-key' with your actual secret key
+      const userName=jwt.verify(token, process.env.JWT_SECRET); // Replace 'your-secret-key' with your actual secret key
       
       // If the token is valid, return true
       
