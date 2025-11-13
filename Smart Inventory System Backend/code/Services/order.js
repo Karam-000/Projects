@@ -1,5 +1,5 @@
 const { sql, poolPromise } = require('../Database/db');
-const {getProductById} = require('..\\Controllers\\Products.js');
+const {getProductById} = require('../Controllers/Products.js');
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
