@@ -165,14 +165,6 @@ CREATE TABLE Payment (
 );
 
 
-CREATE TABLE UserSessions (
-    SessionID INT IDENTITY(1,1) PRIMARY KEY,
-    Username VARCHAR(50) NOT NULL,
-    Token NVARCHAR(500) NOT NULL,
-    SessionStart DATETIME DEFAULT GETDATE(),
-	
-	FOREIGN KEY (Username) REFERENCES Customers(Username)
-);
 
 
 CREATE TABLE Orders (
@@ -248,13 +240,6 @@ CREATE TABLE ErrorLogs (
     ErrorMessage NVARCHAR(MAX) NOT NULL,
     Context NVARCHAR(MAX), -- Optional: Store additional context like OrderID, Username, etc.
     CreatedAt DATETIME DEFAULT GETDATE()
-);
-CREATE TABLE EmployeeLogin (
-    LoginID INT IDENTITY(1,1) PRIMARY KEY,
-    EmployeeID INT,
-    LoginTime DATETIME DEFAULT GETDATE(),
-    Token VARCHAR(500),
-    FOREIGN KEY (EmployeeID) REFERENCES Employees(EmployeeID)
 );
 
 CREATE TABLE ResetPasswordTokens (

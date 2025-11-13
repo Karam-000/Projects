@@ -1,5 +1,5 @@
 const { sql, poolPromise } = require('../Database/db');
-const {getProductById} = require('..\\Controllers\\Products.js');
+const {getProductById} = require('../Controllers/Products.js');
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
@@ -8,7 +8,8 @@ const {sendEmail} = require('./email');
 const { response } = require('express');
 const axios = require('axios');
 const http = require('http');
-const { logError } = require('./errorLogs.js'); 
+const { logError } = require('./errorLogs.js');
+const { calculatePrice } = require('../Helpers/priceHelpers.js');
 
 
 //=======================================add to cart==========================================
@@ -83,12 +84,9 @@ async function addProductToCart(username, inventoryId, quantity) {
       }
       
       const { ProductID, Price, DiscountAmount, ExpirationDate } = inventoryCheckResult.recordset[0];
-      var isDiscountValid = DiscountAmount && ExpirationDate >= new Date();
-      if (isDiscountValid==null){
-        isDiscountValid=0;
-      }
-      const unitPrice = Price -  (isDiscountValid ? DiscountAmount : 0)  ;
+      const unitPrice = calculatePrice(Price, DiscountAmount, ExpirationDate);
       const totalPrice = unitPrice * totalRequiredQuantity;
+      const isDiscountValid = unitPrice < Price;
       
       // Update or insert cart entry
       if (existingCartResult.recordset.length > 0) {
@@ -283,7 +281,7 @@ const sendRecipt = async (subject, message, recipientEmail, sent_from, attachmen
       port: 587,
       auth: {
         user: 'lamamawlawi9@gmail.com',
-        pass: 'njbtlegnwuayifto',
+        pass: process.env.SMTP_PASSWORD,
       },
       tls: {
         rejectUnauthorized: false,
@@ -577,22 +575,7 @@ const testLocation = {
         try {
           const group = branchGroups[branchId];
   
-          // Get branch webhook URL
-          const urlResult = await pool.request()
-            .input('branchId', sql.Int, branchId)
-            .query(`
-              SELECT WebhookURL 
-              FROM WarehouseURL 
-              WHERE BranchID = @branchId;
-            `);
-  
-          if (!urlResult.recordset.length) {
-            const errorMessage = `No WebhookURL found for branch ${branchId}`;
-            await logError('notifyWarehouseOrder -> Webhook URL Check', errorMessage, { orderId, branchId });
-            throw new Error(errorMessage);
-          }
-  
-          const webhookUrl = urlResult.recordset[0].WebhookURL + '/prepare-delivery';
+          const webhookUrl = `${process.env.WAREHOUSE_SERVICE_URL}/prepare-delivery`;
           console.log('Sending notification to:', webhookUrl);
           console.log('Post data:', group.tasks);
   
@@ -924,11 +907,18 @@ WHERE
       // Step 12: Confirm payment using an external service
       try {
         console.log(`Confirming payment with amount: ${totalAmount}`);
-        const response = await axios.post(`http://localhost:3001/confirm-payment`, {
+        const response = await axios.post(`${process.env.PAYMENT_SERVICE_URL}/confirm-payment`, {
           username: username,
           amount: totalAmount,
         });
         if (response.data.success !== true) {
+            await new sql.Request(transaction)
+                .input('OrderID', sql.Int, orderId)
+                .query(`
+                    UPDATE Orders
+                    SET Status = 'failed'
+                    WHERE OrderID = @OrderID;
+                `);
           console.log('Payment failed');
           await transaction.rollback();
           return 'Payment failed';
@@ -936,6 +926,13 @@ WHERE
         console.log('Payment confirmed');
       } catch (err) {
         console.error(`Error during payment confirmation for user ${username}: ${err.response ? err.response.data : err.message}`);
+        await new sql.Request(transaction)
+            .input('OrderID', sql.Int, orderId)
+            .query(`
+                UPDATE Orders
+                SET Status = 'failed'
+                WHERE OrderID = @OrderID;
+            `);
         await transaction.rollback();
         return 'Payment confirmation error';
       }
