@@ -16,6 +16,7 @@ const{deleteCustomer,addPayment,
     getDeliveryLocations,}=require('../Controllers/customers');
 const { checkEmailVerifiedUsers } = require('../Services/Login');
 const { placeOrder } = require('../Services/order');
+const { validateAddToCart } = require('../middlewares/validationMiddleware');
 
 
 
@@ -90,40 +91,18 @@ router.get('/searchProduct', authenticateCustomer, async (req, res) => {
     }
 });
 // Route for adding a product to the cart
-router.post('/addToCart', authenticateCustomer, async (req, res) => {
+router.post('/addToCart', authenticateCustomer, validateAddToCart, async (req, res, next) => {
     try {
         const { inventoryId, quantity } = req.body;
-
-        // Validate inventoryId format
-        if (!inventoryId || isNaN(parseInt(inventoryId))) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: false, message: 'Invalid inventory ID' }));
-            return;
-        }
-
-        // Validate quantity
-        if (!quantity || quantity <= 0 || isNaN(quantity)) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: false, message: 'Invalid quantity' }));
-            return;
-        }
-
-        const username = req.user.username; // Extract username from authenticated user
-        console.log(`Adding product ${inventoryId} to cart for user ${username} with quantity ${quantity}`);
+        const username = req.user.username;
         const success = await addProductToCart(username, inventoryId, quantity);
         if (success) {
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true, message: `Product ${inventoryId} added to cart with quantity ${quantity}` }));
+            res.status(200).json({ success: true, message: `Product ${inventoryId} added to cart with quantity ${quantity}` });
+        } else {
+            res.status(500).json({ success: false, message: 'Failed to add product to cart' });
         }
-        else {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: false, message: 'Failed to add product to cart' }));
-        }
-
-       
     } catch (error) {
-        console.error('Error adding to cart:', error);
-        res.status(500).json({ status: 'error', message: 'Internal Server Error' });
+        next(error);
     }
 });
 // Route for decrementing cart items 
@@ -194,53 +173,49 @@ router.get('/cart', authenticateCustomer, async (req, res) => {
     });
 
 // Route for checking out
-router.post('/placeOrder', authenticateCustomer, async (req, res) => {
+router.post('/placeOrder', authenticateCustomer, async (req, res, next) => {
     try {
-      const { branchId, deliveryLocationId, paymentId } = req.body;
-      const username = req.user.username;
-  
-      // Validate required parameters
-      if (!branchId || !deliveryLocationId || !paymentId) {
-        return res.status(400).json({
-          success: false,
-          message: 'Missing required parameters: branchId, deliveryLocationId, or paymentId'
+        const { branchId, deliveryLocationId, paymentId } = req.body;
+        const username = req.user.username;
+
+        // Validate required parameters
+        if (!branchId || !deliveryLocationId || !paymentId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Missing required parameters: branchId, deliveryLocationId, or paymentId'
+            });
+        }
+
+        // Check email verification status
+        const emailCheck = await checkEmailVerifiedUsers(username);
+
+        if (!emailCheck.success) {
+            return res.status(400).json({
+                success: false,
+                message: emailCheck.message || 'Email verification check failed'
+            });
+        }
+
+        if (!emailCheck.verified) {
+            return res.status(403).json({
+                success: false,
+                message: 'Email not verified. A new verification link has been sent to your email.'
+            });
+        }
+
+        // Proceed with order placement
+        const orderResult = await placeOrder(username, branchId, deliveryLocationId, paymentId);
+
+        res.status(200).json({
+            success: true,
+            message: 'Order placed successfully',
+            order: orderResult
         });
-      }
-  
-      // Check email verification status
-      const emailCheck = await checkEmailVerifiedUsers(username);
-      
-      if (!emailCheck.success) {
-        return res.status(400).json({
-          success: false,
-          message: emailCheck.message || 'Email verification check failed'
-        });
-      }
-  
-      if (!emailCheck.verified) {
-        return res.status(403).json({
-          success: false,
-          message: 'Email not verified. A new verification link has been sent to your email.'
-        });
-      }
-  
-      // Proceed with order placement
-      const orderResult = await placeOrder(username, branchId, deliveryLocationId, paymentId);
-      
-      res.status(200).json({
-        success: true,
-        message: 'Order placed successfully',
-        order: orderResult
-      });
-  
+
     } catch (error) {
-      console.error('Order error:', error);
-      res.status(500).json({
-        success: false,
-        message: error.message || 'Order placement failed'
-      });
+        next(error);
     }
-  });
+});
 //Route to get customer information
 router.get('/getCustomerInfo', authenticateCustomer, async (req, res) => {
 

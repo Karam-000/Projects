@@ -64,10 +64,6 @@ async function loginUser(username, password) {
         const token = generateToken(user.CustomerID, user.Username);
         console.log('JWT token generated');
 
-        // Store username and token in a database table
-        await storeSession(username, token);
-        console.log('Session stored in database');
-
         return { success: true, user, token };
     } catch (err) {
         console.error('Error during login process:', err.message);
@@ -102,32 +98,10 @@ async function verifyPassword(username, password) {
 }
 //verifyPassword('user5', 'karam')
 //===================================================================================================
-
-async function storeSession(username, token) {
-    try {
-        const pool = await poolPromise;
-        const request = new sql.Request(pool);
-
-        // Input parameters for SQL query
-        request.input('Username', sql.NVarChar, username);
-        request.input('Token', sql.NVarChar, token);
-
-        // Execute SQL query to insert username and token into UserSessions table
-        await request.query(`
-            INSERT INTO UserSessions (Username, Token)
-            VALUES (@Username, @Token);
-        `);
-
-        console.log('Session stored in database');
-    } catch (error) {
-        console.error('Error storing session:', error.message);
-        throw error;
-    }
-}
 //===================================================================================================
 function generateToken(userId, username) {
     const tokenPayload = { userId, username };
-    const token = jwt.sign(tokenPayload, '0000', { expiresIn: '1h' });
+    const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '1h' });
     console.log(`JWT token created: ${token}`);
     return token;
 }
@@ -289,5 +263,4 @@ async function checkEmailVerifiedUsers(username) {
 
 
 module.exports = {generateToken,getCustomerInfoFromToken, loginUser,encryptPassword,verifyPassword };
-
 
