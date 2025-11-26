@@ -11,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:intl/intl.dart';
 import 'package:currency_picker/currency_picker.dart';
+import 'api_key.dart';
 
 //================================================================================================
 // SECTION: DATA MODELS
@@ -1382,8 +1383,6 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
 
   Future<String> _callApi(List<Map<String, String>> messages) async {
     const apiUrl = "https://router.huggingface.co/v1/chat/completions";
-    const apiKey =
-        "Add your token here"; // Replace with your key
 
     final response = await http.post(
       Uri.parse(apiUrl),
